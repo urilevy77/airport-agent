@@ -81,6 +81,27 @@ def test_agent_failure_returns_502_with_a_readable_message(client, fake):
     assert "BTS timed out" in response.json()["error"]
 
 
+def test_construction_failure_returns_502_with_a_readable_message():
+    """Conversation.__init__ builds an OpenAI() client eagerly (backend/agent.py),
+    so a missing or malformed API key raises at construction time, before ask()
+    is ever called. That must still surface as a readable JSON 502 — not an
+    unhandled 500 — because this is exactly the first-deploy mistake (forgetting
+    to set OPENAI_API_KEY on Render), and the frontend can't parse a non-JSON
+    body."""
+    from fastapi.testclient import TestClient
+
+    from server.app import create_app
+
+    def broken_factory():
+        raise RuntimeError("no API key")
+
+    client = TestClient(create_app(conversation_factory=broken_factory))
+    response = client.post("/chat", json={"history": [], "question": "Is JFK busy?"})
+    assert response.status_code == 502
+    assert response.headers["content-type"].startswith("application/json")
+    assert "no API key" in response.json()["error"]
+
+
 def test_every_turn_is_traced(client, fake, capsys):
     import json
     fake.scripted_tool = ("get_growth", {"airport": "BOS"}, {"airport": "BOS"})

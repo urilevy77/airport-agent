@@ -35,7 +35,17 @@ def create_app(conversation_factory=None, static_dir=DEFAULT_STATIC):
         if not question:
             return JSONResponse({"error": "Ask a question first."}, status_code=400)
 
-        convo = conversation_factory()
+        # Conversation.__init__ builds an OpenAI() client eagerly (backend/agent.py),
+        # so a missing or malformed API key raises at construction time, not at
+        # ask() time. This needs its own guard to surface as a readable JSON 502
+        # instead of an unhandled 500 — especially critical for the first-deploy
+        # mistake of forgetting to set OPENAI_API_KEY on Render.
+        try:
+            convo = conversation_factory()
+        except Exception as e:
+            trace("construction_error", error=f"{type(e).__name__}: {e}")
+            return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=502)
+
         # prepare_history() (server/sanitize.py) is what guarantees no orphaned
         # 'tool' message reaches the model — Conversation.trim() below cannot
         # provide that guarantee at this call site, because its orphan-strip
