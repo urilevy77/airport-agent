@@ -20,7 +20,13 @@ class FakeConversation:
         self.messages = [dict(SYSTEM)]
 
     def trim(self):
-        pass
+        """Mirror backend.agent.Conversation.trim()'s orphan-dropping semantics:
+        keep the system prompt, then walk forward past any leading 'tool'
+        messages so none is left orphaned at the front (a 400 from the API)."""
+        system, rest = self.messages[0], self.messages[1:]
+        while rest and rest[0]["role"] == "tool":
+            rest.pop(0)
+        self.messages = [system] + rest
 
     def ask(self, question):
         self.messages.append({"role": "user", "content": question})

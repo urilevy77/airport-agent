@@ -38,7 +38,16 @@ def create_app(conversation_factory=None):
         # which drops messages off the front, so a saved length would point at the
         # wrong place once a conversation gets long — and the charts would come back
         # empty exactly when the demo has been running a while.
-        seen = {id(m) for m in convo.messages}
+        #
+        # `retained` keeps a strong reference to every pre-ask() message dict alive
+        # for the rest of this request. Without it, trim() inside ask() could let a
+        # dropped dict get garbage-collected while ask() is still running, and
+        # CPython is then free to hand its id() to a brand-new dict created later
+        # in the same call — which would wrongly look "seen" and silently drop a
+        # chart. Keeping the objects alive means their ids can never be recycled
+        # until after `fresh` is computed below.
+        retained = list(convo.messages)
+        seen = {id(m) for m in retained}
         started = time.monotonic()
         try:
             answer = convo.ask(question)
@@ -49,6 +58,7 @@ def create_app(conversation_factory=None):
             return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=502)
 
         fresh = [m for m in convo.messages if id(m) not in seen]
+        del retained  # safe to release now that `fresh` no longer depends on ids
         charts = charts_from_messages(fresh)
         trace("chat", question=question, answer=answer,
               tools=[c["tool"] for c in charts],

@@ -45,6 +45,33 @@ def test_smuggled_system_message_is_dropped(client):
     assert all(m["role"] != "system" for m in body["history"])
 
 
+def test_orphaned_leading_tool_message_is_dropped_before_asking(client):
+    """A 'tool' message is only valid right after the assistant message that
+    holds its tool_call_id. If a client-supplied history starts with one (e.g.
+    the matching assistant message aged out, or was tampered with), convo.trim()
+    must strip it before ask() runs, or the OpenAI API 400s on the orphan."""
+    body = client.post("/chat", json={
+        "history": [
+            {"role": "tool", "tool_call_id": "orphan", "content": "{}"},
+            {"role": "user", "content": "earlier question"},
+            {"role": "assistant", "content": "earlier answer"},
+        ],
+        "question": "hi"}).json()
+    assert body["history"][0]["role"] != "tool"
+
+
+def test_only_the_newest_history_survives_the_cap(client):
+    """clean_history(...)[-MAX_HISTORY:] must keep the NEWEST messages. A
+    reversed slice ([:MAX_HISTORY], keeping the oldest) would still pass every
+    other test here but silently drop the recent turns instead of the stale ones."""
+    history = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"msg-{i}"}
+               for i in range(60)]
+    body = client.post("/chat", json={"history": history, "question": "hi"}).json()
+    contents = [m["content"] for m in body["history"] if "content" in m]
+    assert "msg-59" in contents
+    assert "msg-0" not in contents
+
+
 def test_agent_failure_returns_502_with_a_readable_message(client, fake):
     fake.raises = RuntimeError("BTS timed out")
     response = client.post("/chat", json={"history": [], "question": "Is JFK busy?"})

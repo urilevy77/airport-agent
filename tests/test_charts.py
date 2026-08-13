@@ -52,6 +52,31 @@ def test_non_json_tool_result_is_passed_through_as_text():
     assert charts_from_messages(messages)[0]["data"] == "BTS timed out"
 
 
+def test_parallel_tool_calls_in_one_message_both_produce_charts():
+    """Real models can emit two tool_calls in a single assistant message, not
+    just across separate turns — charts_from_messages iterates the whole
+    tool_calls list per message, so both must come back, in call order."""
+    messages = [
+        {"role": "assistant", "tool_calls": [
+            {"id": "c1", "type": "function",
+             "function": {"name": "get_congestion",
+                          "arguments": '{"airport": "JFK"}'}},
+            {"id": "c2", "type": "function",
+             "function": {"name": "get_growth",
+                          "arguments": '{"airport": "BOS"}'}},
+        ]},
+        {"role": "tool", "tool_call_id": "c1", "content": '{"airport": "JFK"}'},
+        {"role": "tool", "tool_call_id": "c2", "content": '{"airport": "BOS"}'},
+    ]
+    charts = charts_from_messages(messages)
+    assert charts == [
+        {"tool": "get_congestion", "args": {"airport": "JFK"},
+         "data": {"airport": "JFK"}},
+        {"tool": "get_growth", "args": {"airport": "BOS"},
+         "data": {"airport": "BOS"}},
+    ]
+
+
 def test_tool_error_results_are_still_returned():
     """The frontend shows the error in the chart slot, so it must arrive."""
     messages = [
