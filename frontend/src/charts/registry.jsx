@@ -1,11 +1,20 @@
-// One entry per tool. `label` names the signal for the chip.
-export const CHART_LABELS = {
-  get_congestion: 'Congestion',
-  get_growth: 'Growth',
-  get_candidate: 'Candidates',
-  get_traffic_mix: 'Traffic mix',
-  get_national_rank: 'National rank',
+import CandidateChart from './CandidateChart'
+import CongestionChart from './CongestionChart'
+import GrowthChart from './GrowthChart'
+import NationalRankChart from './NationalRankChart'
+import TrafficMixChart from './TrafficMixChart'
+
+// One entry per tool. Adding a signal means adding one entry here and one file.
+export const CHART_REGISTRY = {
+  get_congestion: { label: 'Congestion', Component: CongestionChart },
+  get_growth: { label: 'Growth', Component: GrowthChart },
+  get_candidate: { label: 'Candidates', Component: CandidateChart },
+  get_traffic_mix: { label: 'Traffic mix', Component: TrafficMixChart },
+  get_national_rank: { label: 'National rank', Component: NationalRankChart },
 }
+
+export const CHART_LABELS = Object.fromEntries(
+  Object.entries(CHART_REGISTRY).map(([tool, { label }]) => [tool, label]))
 
 /** "Congestion · JFK" — the chip text. */
 export function chipLabel(chart) {
@@ -15,7 +24,23 @@ export function chipLabel(chart) {
   return subject ? `${signal} · ${subject}` : signal
 }
 
-// Task 10 replaces this placeholder with real chart components.
+/** A tool entry -> its chart, or the tool's own error. Never a partial chart. */
 export function InlineChart({ chart }) {
-  return <div className="chart-placeholder">{chipLabel(chart)}</div>
+  const entry = CHART_REGISTRY[chart.tool]
+  if (!entry) return null
+
+  const { data } = chart
+  if (typeof data !== 'object' || data === null) {
+    return <div className="chart-error">{String(data)}</div>
+  }
+  if (data.error || data.found === false) {
+    return <div className="chart-error">{data.error || 'No data for this airport.'}</div>
+  }
+  // A ranking has no `found` flag; an empty one has nothing to draw.
+  if (chart.tool === 'get_candidate' && !(data.ranked || []).length) {
+    return <div className="chart-error">{data.note || 'No airports could be ranked.'}</div>
+  }
+
+  const { Component } = entry
+  return <Component data={data} args={chart.args} />
 }

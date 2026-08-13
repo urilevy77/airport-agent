@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import ChartPanel from './components/ChartPanel'
 import ChatColumn from './components/ChatColumn'
 import Composer from './components/Composer'
 import Header from './components/Header'
@@ -45,7 +46,9 @@ export default function App() {
             }
           />
         </div>
-        <aside className="chart-pane" />
+        <aside className="chart-pane">
+          <ChartPanel charts={chat.charts} selectedChartId={chat.selectedChartId} />
+        </aside>
       </div>
     </div>
   )
