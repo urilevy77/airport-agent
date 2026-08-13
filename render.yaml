@@ -1,0 +1,25 @@
+# Render deployment: ONE service serving both the API and the React build.
+#
+# WHY NOT SERVERLESS: bts.py caches BTS responses in-process, and a cold function
+# would re-pay the first fetch (~16s for a national ranking) on every request.
+# Render runs one long-lived process, so that cost is paid once at boot.
+#
+# WHY ONE UVICORN WORKER: multiple workers would each hold a separate BTS cache,
+# and every request here is I/O-bound on BTS anyway — async handling covers it.
+services:
+  - type: web
+    name: airport-agent
+    runtime: python
+    plan: free
+    buildCommand: |
+      pip install -r requirements.txt
+      cd frontend && npm ci && npm run build
+    startCommand: python3 -m uvicorn server.app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false          # set in the Render dashboard, never in git
+      - key: PYTHON_VERSION
+        value: "3.13.3"
+      - key: NODE_VERSION
+        value: "20.11.1"

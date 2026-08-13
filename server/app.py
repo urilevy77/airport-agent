@@ -4,18 +4,23 @@ STATELESS by design: the browser keeps its own history and replays it each
 turn, so no visitor can see another's conversation, any process can answer any
 request, and a restart never wipes a conversation mid-demo.
 """
+import os
 import time
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from server.charts import charts_from_messages
 from server.sanitize import clip_question, prepare_history
 from server.schemas import ChatRequest, ChatResponse
 from server.tracing import trace
 
+DEFAULT_STATIC = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
-def create_app(conversation_factory=None):
+
+def create_app(conversation_factory=None, static_dir=DEFAULT_STATIC):
     """Build the app. `conversation_factory` is injectable so tests can run the
     whole endpoint without an OpenAI key or a network call."""
     if conversation_factory is None:
@@ -80,6 +85,15 @@ def create_app(conversation_factory=None):
     def health():
         """Render polls this to decide whether the container is alive."""
         return {"ok": True}
+
+    # LAST: mounting "/" ahead of the routes above would shadow them. Conditional
+    # because a fresh checkout and CI have no build, and an unconditional mount
+    # raises at import time and takes the API tests down with it.
+    static_dir = Path(static_dir)
+    if (static_dir / "index.html").exists():
+        app.mount("/", StaticFiles(directory=static_dir, html=True), name="frontend")
+    else:
+        trace("frontend_missing", path=str(static_dir))
 
     return app
 
