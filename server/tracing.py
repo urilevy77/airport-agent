@@ -10,6 +10,11 @@ from datetime import datetime, timezone
 
 def trace(event, **fields):
     """Emit one structured record. Never raises: a trace must not break a request."""
-    record = {"ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-              "event": event, **fields}
-    print(json.dumps(record, default=repr), flush=True)
+    try:
+        record = {"ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                  "event": event, **fields}
+        print(json.dumps(record, default=repr), flush=True)
+    except Exception:
+        # A trace must never break a request. Silently ignore any error
+        # (json serialization, repr raising, print to broken stdout, etc).
+        pass
