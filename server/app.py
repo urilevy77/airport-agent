@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from server.charts import charts_from_messages
-from server.sanitize import MAX_HISTORY, clean_history, clip_question
+from server.sanitize import clip_question, prepare_history
 from server.schemas import ChatRequest, ChatResponse
 from server.tracing import trace
 
@@ -31,8 +31,15 @@ def create_app(conversation_factory=None):
             return JSONResponse({"error": "Ask a question first."}, status_code=400)
 
         convo = conversation_factory()
-        convo.messages += clean_history(request.history)[-MAX_HISTORY:]
-        convo.trim()                 # never leave a tool message orphaned
+        # prepare_history() (server/sanitize.py) is what guarantees no orphaned
+        # 'tool' message reaches the model — Conversation.trim() below cannot
+        # provide that guarantee at this call site, because its orphan-strip
+        # sits behind a `len(rest) <= MAX_MESSAGES` guard that always fires
+        # here (MAX_MESSAGES == MAX_HISTORY == 40, and we never append more
+        # than 40 client messages). trim() is kept only in case a future
+        # change makes conversations grow past that cap within a single call.
+        convo.messages += prepare_history(request.history)
+        convo.trim()
 
         # Mark existing messages BY IDENTITY, not by index: ask() calls trim(),
         # which drops messages off the front, so a saved length would point at the

@@ -48,8 +48,10 @@ def test_smuggled_system_message_is_dropped(client):
 def test_orphaned_leading_tool_message_is_dropped_before_asking(client):
     """A 'tool' message is only valid right after the assistant message that
     holds its tool_call_id. If a client-supplied history starts with one (e.g.
-    the matching assistant message aged out, or was tampered with), convo.trim()
-    must strip it before ask() runs, or the OpenAI API 400s on the orphan."""
+    the matching assistant message aged out, or was tampered with),
+    server.sanitize.prepare_history() must strip it before ask() runs, or the
+    OpenAI API 400s on the orphan. (Conversation.trim() cannot provide this
+    guarantee at this call site — see the comment in server/app.py.)"""
     body = client.post("/chat", json={
         "history": [
             {"role": "tool", "tool_call_id": "orphan", "content": "{}"},

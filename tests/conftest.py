@@ -20,13 +20,24 @@ class FakeConversation:
         self.messages = [dict(SYSTEM)]
 
     def trim(self):
-        """Mirror backend.agent.Conversation.trim()'s orphan-dropping semantics:
-        keep the system prompt, then walk forward past any leading 'tool'
-        messages so none is left orphaned at the front (a 400 from the API)."""
+        """Faithfully mirror backend.agent.Conversation.trim(), length guard
+        included. Real trim() only strips orphaned leading tool messages after
+        dropping down to the newest MAX_MESSAGES (40) — and /chat's own
+        MAX_HISTORY cap is also 40, so at that call site `len(rest) <=
+        MAX_MESSAGES` is always true and trim() returns before it ever strips
+        anything. A lenient fake (unconditional strip, no length guard) would
+        make tests pass for reasons the real Conversation can't back up —
+        orphan protection at the /chat call site lives in
+        server.sanitize.prepare_history(), not here. Do not simplify this back
+        to an unconditional strip."""
+        MAX_MESSAGES = 40  # mirrors backend.agent.MAX_MESSAGES; kept in sync by hand
         system, rest = self.messages[0], self.messages[1:]
-        while rest and rest[0]["role"] == "tool":
-            rest.pop(0)
-        self.messages = [system] + rest
+        if len(rest) <= MAX_MESSAGES:
+            return
+        kept = rest[-MAX_MESSAGES:]
+        while kept and kept[0]["role"] == "tool":
+            kept.pop(0)
+        self.messages = [system] + kept
 
     def ask(self, question):
         self.messages.append({"role": "user", "content": question})
