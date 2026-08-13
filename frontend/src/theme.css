@@ -106,3 +106,28 @@ body {
 /* Inline charts are the mobile fallback only — the side panel owns them on desktop. */
 .inline-chart { display: none; margin-top: 12px; }
 @media (max-width: 860px) { .inline-chart { display: block; } }
+
+.mic-wrap { position: relative; display: flex; align-items: center; }
+.mic {
+  cursor: pointer; width: 40px; height: 40px; font-size: 16px;
+  display: grid; place-items: center;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: 50%;
+}
+.mic:hover { border-color: var(--accent); }
+.mic.listening {
+  background: var(--danger); border-color: var(--danger); color: #fff;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(179, 38, 30, 0.45); }
+  50%      { box-shadow: 0 0 0 7px rgba(179, 38, 30, 0); }
+}
+@media (prefers-reduced-motion: reduce) { .mic.listening { animation: none; } }
+
+.mic-error {
+  position: absolute; bottom: 46px; left: 0; white-space: nowrap;
+  font-size: 12px; color: var(--danger);
+  background: var(--surface); border: 1px solid #f5c6c2;
+  border-radius: 6px; padding: 3px 7px;
+}
