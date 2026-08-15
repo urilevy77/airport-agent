@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from server import trace_store
 from server.charts import charts_from_messages
 from server.sanitize import clip_question, prepare_history
 from server.schemas import ChatRequest, ChatResponse
@@ -30,6 +31,9 @@ def create_app(conversation_factory=None, static_dir=DEFAULT_STATIC):
     if conversation_factory is None:
         from server.agent_bridge import Conversation
         conversation_factory = Conversation
+
+    from server.agent_bridge import Conversation  # noqa: F401 — puts backend/ on sys.path
+    from recorder import Recorder
 
     app = FastAPI(title="Airport Investment Intelligence Agent")
 
@@ -57,6 +61,11 @@ def create_app(conversation_factory=None, static_dir=DEFAULT_STATIC):
         # here (MAX_MESSAGES == MAX_HISTORY == 40, and we never append more
         # than 40 client messages). trim() is kept only in case a future
         # change makes conversations grow past that cap within a single call.
+        # Assigned rather than passed: conversation_factory keeps its zero-argument
+        # contract, so the existing test doubles in tests/conftest.py still work.
+        recorder = Recorder()
+        convo.recorder = recorder
+
         convo.messages += prepare_history(request.history)
         convo.trim()
 
@@ -78,22 +87,35 @@ def create_app(conversation_factory=None, static_dir=DEFAULT_STATIC):
         try:
             answer = convo.ask(question)
         except Exception as e:
-            trace("chat_error", question=question, error=f"{type(e).__name__}: {e}")
+            error = f"{type(e).__name__}: {e}"
+            trace("chat_error", question=question, error=error)
+            # The recorder is OURS, so the steps that completed before the
+            # failure are still here. A dead turn is the one most worth a trace.
+            trace_store.write(trace_store.make_record(
+                question=question, answer="", model=getattr(convo, "model", None),
+                steps=list(recorder.steps),
+                latency_ms=int((time.monotonic() - started) * 1000), error=error))
             # 502 with a readable message, not a 500 page: the chat stays usable
             # and the user can retry.
-            return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=502)
+            return JSONResponse({"error": error}, status_code=502)
 
         fresh = [m for m in convo.messages if id(m) not in seen]
         del retained  # safe to release now that `fresh` no longer depends on ids
         charts = charts_from_messages(fresh)
+        record = trace_store.make_record(
+            question=question, answer=answer, model=getattr(convo, "model", None),
+            steps=list(recorder.steps),
+            latency_ms=int((time.monotonic() - started) * 1000))
+        trace_store.write(record)
         trace("chat", question=question, answer=answer,
               tools=[c["tool"] for c in charts],
               tool_results=[c["data"] for c in charts],
-              latency_ms=int((time.monotonic() - started) * 1000))
+              latency_ms=record["latency_ms"])
 
         # Everything except the system prompt: the client stores this and replays
         # it next turn, and our prompt is rebuilt server-side each time.
-        return ChatResponse(answer=answer, charts=charts, history=convo.messages[1:])
+        return ChatResponse(answer=answer, charts=charts,
+                            history=convo.messages[1:], trace=record)
 
     @app.get("/health")
     def health():
