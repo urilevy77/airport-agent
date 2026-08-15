@@ -5,22 +5,16 @@ $env:ANTHROPIC_API_KEY = '...'
 .\run.ps1                # web UI
 python agent.py          # terminal
 python selftest.py       # data layer only — no API key needed
-python evals/run.py      # every row below, automated, against two+ prompts
 ```
 
 `selftest.py` is the first thing to run when something looks wrong: it checks the
 numbers and the failure modes without involving the model at all. If it passes,
 the bug is in routing or the prompt, which is what the rest of this file maps.
 
-**Every table below is also `evals/run.py`'s case set** (`evals/cases.py`) — the
-same "question → expected tool / must-not-say" checks, run automatically against
-however many named prompt variants you keep in `evals/variants.py`, so you don't
-have to re-run this whole page by hand after every prompt tweak. It costs real
-API calls (one live conversation per question per variant), so it's a "run it
-when you're about to change the prompt," not a CI step. See `evals/run.py --help`
-for filtering by variant/case and trying a different model or effort. When you
-add a row to a table below, add the matching `Case` to `cases.py` too — that's
-the whole extension mechanism.
+Every table below is a "question → expected tool / must-not-say" check, run by
+hand: each one costs a live conversation, so this is a "walk it when you're
+about to change the prompt," not a CI step. When you add a row, keep it in the
+same shape as its neighbours.
 
 If the wrong tool fires, the bug is in the `description` string in `tools.py` or
 the routing block in `prompts.py` — not in `agent.py`.
