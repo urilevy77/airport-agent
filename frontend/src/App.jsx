@@ -1,13 +1,38 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { fetchConfig } from './api/chat'
 import ChartPanel from './components/ChartPanel'
 import ChatColumn from './components/ChatColumn'
 import Composer from './components/Composer'
 import Header from './components/Header'
 import MicButton from './components/MicButton'
+import ModelPicker from './components/ModelPicker'
 import TracesPage from './components/TracesPage'
 import useChat from './hooks/useChat'
 import useSpeech from './hooks/useSpeech'
+import { ThemeProvider } from './theme/ThemeContext'
 import './theme.css'
+
+// The model allowlist, fetched once at startup — each model carries its OWN
+// effort list (some models, e.g. Haiku, take none at all), which is why this
+// is `models: [{id, label, efforts}]` rather than one flat effort list shared
+// by every model. Never fatal: if /config is unreachable (offline dev server,
+// older backend) the picker just doesn't render, and /chat runs on its own
+// defaults — same as picking nothing.
+function usePickerConfig() {
+  const [config, setConfig] = useState({ models: [], defaultModel: '' })
+  useEffect(() => {
+    let cancelled = false
+    fetchConfig()
+      .then((cfg) => {
+        if (!cancelled) {
+          setConfig({ models: cfg.models || [], defaultModel: cfg.default_model || '' })
+        }
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+  return config
+}
 
 // A hash route, not a real one, and not a router dependency. FastAPI serves the
 // build through StaticFiles(html=True), which does NOT fall back to index.html
@@ -25,6 +50,15 @@ function useHash() {
   return hash
 }
 
+/** The question whose answer produced the selected chart, for the pane header. */
+function questionFor(messages, selectedChartId) {
+  const turn = String(selectedChartId || '').split('-')[0]
+  const answerAt = messages.findIndex((m) => m.id === turn)
+  if (answerAt < 1) return ''
+  const asked = messages[answerAt - 1]
+  return asked?.role === 'user' ? asked.text : ''
+}
+
 function keyFromHash(hash) {
   const query = hash.indexOf('?')
   if (query === -1) return ''
@@ -34,15 +68,39 @@ function keyFromHash(hash) {
 export default function App() {
   const hash = useHash()
   const chat = useChat()
+  const { models, defaultModel } = usePickerConfig()
+  const [model, setModel] = useState('')
+  const [effort, setEffort] = useState('')
   const [draft, setDraft] = useState('')
+
+  // The effort options for whichever model is ACTUALLY in effect ('' means
+  // "server default", i.e. defaultModel) — never a flat list shared by every
+  // model, since e.g. Haiku takes no effort at all.
+  const efforts = useMemo(
+    () => models.find((m) => m.id === (model || defaultModel))?.efforts ?? [],
+    [models, model, defaultModel])
+
+  // Switching to a model that doesn't support the currently-picked effort
+  // (e.g. Sonnet "high" -> Haiku) must clear it — sending that combination is
+  // exactly the 400 this whole picker exists to prevent.
+  useEffect(() => {
+    if (effort && !efforts.includes(effort)) setEffort('')
+  }, [effort, efforts])
   // Dictation writes into the same draft the user types into, then STOPS.
   // No auto-send: recognition mishears airport codes ("PWM" -> "PW M"), so the
   // user gets one glance to fix it before sending.
   const speech = useSpeech({ onTranscript: setDraft })
 
-  if (hash.startsWith('#traces')) return <TracesPage traceKey={keyFromHash(hash)} />
+  if (hash.startsWith('#traces')) {
+    return (
+      <ThemeProvider>
+        <TracesPage traceKey={keyFromHash(hash)} />
+      </ThemeProvider>
+    )
+  }
 
   return (
+    <ThemeProvider>
     <div className="app">
       <Header />
       <div className="workspace">
@@ -57,11 +115,21 @@ export default function App() {
             onPickStarter={setDraft}
           />
           <Composer
-            onSend={chat.send}
+            onSend={(question) => chat.send(question, { model, effort })}
             disabled={chat.status === 'thinking'}
             status={chat.status}
             value={draft}
             onChange={setDraft}
+            settingsSlot={
+              <ModelPicker
+                models={models}
+                efforts={efforts}
+                model={model}
+                effort={effort}
+                onModelChange={setModel}
+                onEffortChange={setEffort}
+              />
+            }
             micSlot={
               <MicButton
                 supported={speech.supported}
@@ -74,9 +142,14 @@ export default function App() {
           />
         </div>
         <aside className="chart-pane">
-          <ChartPanel charts={chat.charts} selectedChartId={chat.selectedChartId} />
+          <ChartPanel
+            charts={chat.charts}
+            selectedChartId={chat.selectedChartId}
+            question={questionFor(chat.messages, chat.selectedChartId)}
+          />
         </aside>
       </div>
     </div>
+    </ThemeProvider>
   )
 }

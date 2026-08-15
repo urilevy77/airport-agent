@@ -23,6 +23,25 @@ import anthropic
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5")
 MAX_TOKENS = 8192
 
+# The models and effort levels a user is allowed to pick from the UI. An
+# explicit allowlist, never a client-supplied string passed straight through:
+# an unknown model 404s mid-conversation and an unknown effort 400s the whole
+# turn, so server/app.py checks a request's choices against these before
+# handing them to Conversation.
+MODELS = {
+    "claude-sonnet-5": "Sonnet 5 - balanced (default)",
+    "claude-opus-5": "Opus 5 - most capable, higher cost and latency",
+    "claude-haiku-4-5": "Haiku 4.5 - fastest and cheapest, no effort control",
+}
+# Not every model accepts `effort` — Haiku 4.5 rejects the parameter outright
+# (400), so its allowed set is empty and the frontend must not offer one.
+# Keyed by the SAME ids as MODELS (backend/selftest.py checks the two agree).
+MODEL_EFFORTS = {
+    "claude-sonnet-5": ("low", "medium", "high"),
+    "claude-opus-5": ("low", "medium", "high"),
+    "claude-haiku-4-5": (),
+}
+
 # Where an assistant message keeps the provider's own content blocks, verbatim.
 # The flat `content` / `tool_calls` beside it are a projection of these for the
 # rest of the app; this key is what goes back to the API.
@@ -150,13 +169,21 @@ class Client:
         self.client = anthropic.Anthropic()
         self.model = model or MODEL
 
-    def complete(self, system, messages, tools):
-        """One round trip. Returns one assistant message in our format."""
+    def complete(self, system, messages, tools, model=None, effort=None):
+        """One round trip. Returns one assistant message in our format.
+
+        `model` and `effort` are per-call overrides of this Client's own
+        defaults: Conversation carries the user's picks on self.model /
+        self.effort and passes them in fresh every round, so a plain
+        Client (CLI, REPL, no picks made) is untouched.
+        """
+        extra = {"output_config": {"effort": effort}} if effort else {}
         response = self.client.messages.create(
-            model=self.model,
+            model=model or self.model,
             max_tokens=MAX_TOKENS,
             system=system,
             messages=to_provider(messages),
             tools=tools,
+            **extra,
         )
         return from_provider(response)

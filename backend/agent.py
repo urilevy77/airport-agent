@@ -19,7 +19,7 @@ import json
 import sys
 
 from llm import Client
-from prompts import system_prompt
+from prompts import system_blocks
 from recorder import NULL
 from tools import TOOL_SCHEMAS, TOOLS
 
@@ -32,7 +32,10 @@ def call_tool(call):
 
     The guard is deliberate: a bad IATA code or a BTS outage becomes an
     {"error": ...} the model can read and recover from, instead of killing
-    the conversation and losing all history.
+    the conversation and losing all history. It is no longer protecting
+    against malformed input — every tool schema is strict (tools.py), so
+    `arguments` is guaranteed valid before this runs — only against real
+    failures inside the tool functions themselves.
     """
     try:
         function = call["function"]
@@ -42,17 +45,13 @@ def call_tool(call):
     return json.dumps(result)
 
 def step_args(call):
-    """A tool call's arguments as a dict, for the trace. Arguments arrive as a
-    JSON string and a malformed one must not break a turn — it certainly must
-    not break the recording of one. A structurally malformed call dict (no
-    "function" key, or "arguments" missing entirely) must degrade the same
-    way, not raise a KeyError that kills the whole turn — this is called
-    BEFORE call_tool()'s own try/except guard, so it has no recovery net of
-    its own."""
-    try:
-        return json.loads((call.get("function") or {})["arguments"])
-    except (ValueError, TypeError, KeyError):
-        return {}
+    """A tool call's arguments as a dict, for the trace.
+
+    No try/except needed: every tool schema is strict (tools.py), so the API
+    guarantees `arguments` is present and valid JSON matching the schema
+    before a call ever reaches here.
+    """
+    return json.loads(call["function"]["arguments"])
 
 def step_outcome(raw):
     """What call_tool returned, split into a result and an error for the trace.
@@ -76,16 +75,25 @@ class Conversation:
     re-read earlier turns and resolve follow-ups like "and Boston?".
     """
 
-    def __init__(self, model=None, recorder=None):
+    def __init__(self, model=None, recorder=None, effort=None, system_text=None):
         self.client = Client(model)
+        # self.model, not self.client.model, is what every round actually
+        # sends (see _next_message): server/app.py can swap it after
+        # construction (a user's model/effort pick), and the Client's own
+        # default only matters for callers that never override it (CLI, REPL).
         self.model = self.client.model
+        self.effort = effort
         # NULL by default: the CLI, the REPL and run() carry no tracing, and
         # backend/ keeps working with no server and no database.
         self.recorder = recorder or NULL
         # Built here, not imported as a constant: the prompt states today's date
         # and how stale the table is, and a Conversation is constructed per
-        # request (server/app.py), which is what keeps both fresh.
-        self.messages = [{"role": "system", "content": system_prompt()}]
+        # request (server/app.py), which is what keeps both fresh. `system_text`
+        # overrides the static rules only — the live coverage block is still
+        # appended, so backend/evals/run.py can compare rewritten prompts
+        # against real, current data instead of a frozen one.
+        self.messages = [{"role": "system",
+                          "content": system_blocks(static=system_text)}]
 
     def say(self, role, content, **extra):
         """Append one message to memory."""
@@ -105,7 +113,7 @@ class Conversation:
                 # already lives, so call_tool itself stays the pure function it
                 # was and its recovery guard is untouched.
                 with self.recorder.step(
-                        "tool", name=(call.get("function") or {}).get("name"),
+                        "tool", name=call["function"]["name"],
                         args=step_args(call)) as step:
                     output = call_tool(call)
                     step.set(**step_outcome(output))
@@ -120,7 +128,8 @@ class Conversation:
             message = self.client.complete(
                 system=self.messages[0]["content"],   # the system prompt is not a message
                 messages=self.messages[1:],
-                tools=TOOL_SCHEMAS)
+                tools=TOOL_SCHEMAS,
+                model=self.model, effort=self.effort)
             # Inside the block on purpose: recorded even if a later line throws.
             step.set(text=message.get("content", ""),
                      calls=[c["function"]["name"]

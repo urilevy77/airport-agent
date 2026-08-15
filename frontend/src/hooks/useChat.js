@@ -15,17 +15,22 @@ export default function useChat() {
   // rendered, and it must never be confused with the display messages above.
   const llmHistory = useRef([])
   const lastQuestion = useRef('')
+  const lastOptions = useRef({})
 
-  const send = useCallback(async (question) => {
+  const send = useCallback(async (question, options = {}) => {
     const text = question.trim()
     if (!text || status === 'thinking') return
 
     lastQuestion.current = text
+    lastOptions.current = options
     setMessages((prior) => [...prior, { id: nextId(), role: 'user', text, chartIds: [] }])
     setStatus('thinking')
 
     try {
-      const body = await sendChat({ history: llmHistory.current, question: text })
+      const body = await sendChat({
+        history: llmHistory.current, question: text,
+        model: options.model, effort: options.effort,
+      })
       llmHistory.current = body.history || []
 
       const answerId = nextId()
@@ -52,7 +57,7 @@ export default function useChat() {
     }
   }, [status])
 
-  const retry = useCallback(() => send(lastQuestion.current), [send])
+  const retry = useCallback(() => send(lastQuestion.current, lastOptions.current), [send])
   const selectChart = useCallback((id) => setSelectedChartId(id), [])
 
   return { messages, charts, traces, selectedChartId, status, error: null, send, selectChart, retry }

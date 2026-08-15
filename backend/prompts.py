@@ -195,16 +195,10 @@ calendar: the latest complete year is {complete_year}, even though today is
 than answering with the nearest months you have."""
 
 
-def system_prompt(today=None, newest=None, complete_year=None):
-    """The full prompt for ONE request: static rules plus measured coverage.
-
-    Built per call, never at import. Interpolating a date into a module-level
-    constant would freeze it at process start — on Render that is the date of the
-    last deploy, drifting further wrong every day the process stays up.
-
-    The coverage block goes LAST so the static prefix stays byte-identical between
-    requests and remains eligible for prompt caching.
-    """
+def _coverage_text(today, newest, complete_year):
+    """The volatile suffix alone, or "" once degraded — shared by system_prompt()
+    and system_blocks() so the two can never disagree about what the coverage
+    section says."""
     import datetime
 
     from bts import DEFAULT_MONTHS, newest_month
@@ -217,5 +211,39 @@ def system_prompt(today=None, newest=None, complete_year=None):
     except Exception:
         # A BTS outage must not cost the user their whole turn. Degrading to the
         # static rules loses the month names, not the agent.
-        return SYSTEM
-    return f"{SYSTEM}\n\n{coverage_block(today, newest, complete_year, DEFAULT_MONTHS)}"
+        return ""
+    return coverage_block(today, newest, complete_year, DEFAULT_MONTHS)
+
+
+def system_prompt(today=None, newest=None, complete_year=None, static=None):
+    """The full prompt for ONE request: static rules plus measured coverage, as
+    one string. Kept for callers (selftest.py, tests) that just want the text —
+    system_blocks() below is what the agent actually sends to the API.
+
+    `static` overrides the static rules text (default SYSTEM) — the hook
+    backend/evals/run.py uses to try a rewritten prompt against the SAME live
+    coverage block a real request would get.
+    """
+    static = SYSTEM if static is None else static
+    coverage = _coverage_text(today, newest, complete_year)
+    return f"{static}\n\n{coverage}" if coverage else static
+
+
+def system_blocks(today=None, newest=None, complete_year=None, static=None):
+    """The system prompt as Messages API content blocks, split for caching.
+
+    The static rules are the vast majority of the prompt and never change
+    between requests, so they carry a cache_control breakpoint: after the first
+    request in a cache window, every later turn reads them from cache instead of
+    paying full price. The coverage block is genuinely volatile (it names actual
+    months) so it stays uncached and unmarked, after the breakpoint.
+
+    `static` overrides the static rules text — see system_prompt() above.
+    """
+    static = SYSTEM if static is None else static
+    blocks = [{"type": "text", "text": static,
+              "cache_control": {"type": "ephemeral"}}]
+    coverage = _coverage_text(today, newest, complete_year)
+    if coverage:
+        blocks.append({"type": "text", "text": coverage})
+    return blocks

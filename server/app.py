@@ -38,15 +38,41 @@ def create_app(conversation_factory=None, static_dir=DEFAULT_STATIC):
         conversation_factory = Conversation
 
     from server.agent_bridge import Conversation  # noqa: F401 — puts backend/ on sys.path
+    from llm import MODEL, MODEL_EFFORTS, MODELS
     from recorder import Recorder
 
     app = FastAPI(title="Airport Investment Intelligence Agent")
+
+    @app.get("/config")
+    def config():
+        """What the picker in the UI is allowed to offer — the single source of
+        truth is llm.MODELS / llm.MODEL_EFFORTS, so the frontend never hardcodes
+        (and drifts from) the allowlist /chat actually validates against, and
+        can never offer an effort a given model doesn't support (e.g. Haiku 4.5,
+        which takes none at all — an empty `efforts` list here)."""
+        return {"default_model": MODEL,
+                "models": [{"id": k, "label": v, "efforts": list(MODEL_EFFORTS[k])}
+                          for k, v in MODELS.items()]}
 
     @app.post("/chat")
     def chat(request: ChatRequest):
         question = clip_question(request.question)
         if not question:
             return JSONResponse({"error": "Ask a question first."}, status_code=400)
+
+        # Reject an unknown model, or an effort that model doesn't support,
+        # before doing anything else — a tampered or stale client (or a picker
+        # bug: this is exactly what caught Haiku + "high" reaching the API and
+        # 400ing mid-turn) should get a clear 400 here instead.
+        if request.model is not None and request.model not in MODELS:
+            return JSONResponse({"error": f"Unknown model '{request.model}'."},
+                                status_code=400)
+        effective_model = request.model or MODEL
+        if request.effort is not None and request.effort not in MODEL_EFFORTS[effective_model]:
+            return JSONResponse(
+                {"error": f"Effort '{request.effort}' isn't available for "
+                          f"model '{effective_model}'."},
+                status_code=400)
 
         # Conversation.__init__ builds the Anthropic client eagerly (backend/llm.py),
         # so a missing or malformed API key raises at construction time, not at
@@ -63,6 +89,13 @@ def create_app(conversation_factory=None, static_dir=DEFAULT_STATIC):
         # contract, so the existing test doubles in tests/conftest.py still work.
         recorder = Recorder()
         convo.recorder = recorder
+        # Same reasoning for the user's model/effort pick — already validated
+        # above. Only set when given, so a request with neither leaves
+        # Conversation's own defaults (backend/llm.py MODEL, no effort) alone.
+        if request.model is not None:
+            convo.model = request.model
+        if request.effort is not None:
+            convo.effort = request.effort
 
         # prepare_history() (server/sanitize.py) is what guarantees no orphaned
         # 'tool' message reaches the model — Conversation.trim() below cannot

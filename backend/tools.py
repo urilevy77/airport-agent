@@ -301,10 +301,18 @@ def schema(fn, description, properties, required=None):
     `required` defaults to every property — right for the airport-code tools,
     where a missing code means the model guessed. Pass it explicitly for tools
     with real defaults, so the model can call them with no arguments at all.
+
+    `strict: True` + `additionalProperties: False` make every tool strict-mode:
+    the API validates tool_use.input against this schema before Claude's call
+    ever comes back, so a call that reaches call_tool() (agent.py) is
+    GUARANTEED to have the right keys and types already — that guarantee is
+    what let agent.py drop its own re-parsing of malformed call arguments.
     """
     return {"name": fn.__name__,
             "description": description,
+            "strict": True,
             "input_schema": {"type": "object", "properties": properties,
+                             "additionalProperties": False,
                              "required": list(properties) if required is None
                                          else required}}
 

@@ -7,6 +7,12 @@ from pydantic import BaseModel, Field
 class ChatRequest(BaseModel):
     question: str = ""
     history: list[Any] = Field(default_factory=list)   # untrusted; see sanitize.py
+    # Both optional; None means "use the server default". Checked against
+    # llm.MODELS / llm.MODEL_EFFORTS in server/app.py — never passed to the
+    # API unvalidated, and effort is checked against the CHOSEN model, since
+    # not every model accepts one (Haiku 4.5 accepts none at all).
+    model: str | None = None
+    effort: str | None = None
 
 
 class Chart(BaseModel):

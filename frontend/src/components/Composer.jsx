@@ -1,6 +1,6 @@
 import { useState } from 'react'
 
-export default function Composer({ onSend, disabled, status, micSlot, value, onChange }) {
+export default function Composer({ onSend, disabled, status, micSlot, settingsSlot, value, onChange }) {
   const [internal, setInternal] = useState('')
   // Controlled when a parent supplies `value` (voice dictation writes into it).
   const text = value !== undefined ? value : internal
@@ -15,6 +15,7 @@ export default function Composer({ onSend, disabled, status, micSlot, value, onC
 
   return (
     <form className="composer" onSubmit={submit}>
+      {settingsSlot}
       {micSlot}
       <input
         type="text"

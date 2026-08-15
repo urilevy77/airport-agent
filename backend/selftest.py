@@ -27,6 +27,7 @@ from bts import (DEFAULT_MONTHS, by_year, fetch_all_months, fetch_recent_months,
                  newest_month)
 from kpis import (WEIGHTS, congestion, growth, haul, latest_complete_year, mix,
                   national_rank, profile, reference, score, tier_of, verdict)
+from llm import MODEL, MODEL_EFFORTS, MODELS
 from prompts import SYSTEM, system_prompt
 from tools import (FLOOR, TOOL_SCHEMAS, TOOLS, find_candidates, get_candidate,
                    get_congestion, get_growth, get_national_rank,
@@ -173,6 +174,20 @@ def coverage_checks():
     check("window is DEFAULT_MONTHS long", len(rows) == DEFAULT_MONTHS, str(len(rows)))
 
 
+# ---------------------------------------------------------------- model picker
+def model_checks():
+    """MODELS and MODEL_EFFORTS back the /config endpoint and the /chat
+    validation in server/app.py — if they ever fall out of sync, either the
+    UI offers a model /chat can't look up an effort list for (KeyError, a
+    500), or a model silently gets no effort options without anyone noticing.
+    """
+    head("model picker (server/app.py's /config + /chat validation)")
+    check("MODEL_EFFORTS has exactly the same models as MODELS",
+          set(MODEL_EFFORTS) == set(MODELS), str(set(MODELS) ^ set(MODEL_EFFORTS)))
+    check("the default model (ANTHROPIC_MODEL / llm.MODEL) is one of MODELS",
+          MODEL in MODELS, MODEL)
+
+
 # ---------------------------------------------------------------- tools layer
 def tool_checks():
     head("tools layer (what the model actually calls)")
@@ -185,6 +200,11 @@ def tool_checks():
         check(f"schema {s['name']}: named + described + params",
               s["name"] in TOOLS and len(s["description"]) > 40
               and "properties" in s["input_schema"])
+        # strict: True needs additionalProperties: False alongside it, or the
+        # API rejects the tool definition outright.
+        check(f"schema {s['name']}: strict",
+              s.get("strict") is True
+              and s["input_schema"].get("additionalProperties") is False)
     finder = [s for s in TOOL_SCHEMAS if s["name"] == "find_candidates"][0]
     check("find_candidates is callable with no arguments",
           finder["input_schema"]["required"] == [])
@@ -280,6 +300,7 @@ if __name__ == "__main__":
     rank_checks(codes[0])
     screen_checks()
     coverage_checks()
+    model_checks()
     tool_checks()
     failure_checks()
     print(f"\n{ok} passed, {fail} failed   ({time.time() - t0:.1f}s)")
