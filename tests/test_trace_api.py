@@ -92,3 +92,30 @@ def test_an_unknown_trace_id_is_404(monkeypatch, fake):
 
     assert client.get("/api/traces/no-such-id",
                       headers={"X-Trace-Key": "s3cret"}).status_code == 404
+
+
+def test_a_wrong_key_404_is_byte_identical_to_a_missing_route_404(monkeypatch, fake):
+    """Status code alone isn't enough — a distinct body would let a prober
+    tell 'wrong key' apart from 'no tracing API at all' even though both
+    return 404."""
+    monkeypatch.delenv("TRACE_KEY", raising=False)
+    no_route_body = TestClient(
+        create_app(conversation_factory=fake)).get("/api/traces").json()
+
+    client = keyed(monkeypatch, fake)
+    wrong_key_body = client.get(
+        "/api/traces", headers={"X-Trace-Key": "wrong"}).json()
+
+    assert wrong_key_body == no_route_body
+
+
+def test_a_negative_limit_does_not_bypass_the_cap(monkeypatch, fake):
+    """SQLite treats a negative LIMIT as 'no limit' — the route must clamp
+    it, not pass it straight through."""
+    client = keyed(monkeypatch, fake)
+    for question in ["a", "b", "c"]:
+        stored(question)
+
+    body = client.get("/api/traces?limit=-1",
+                      headers={"X-Trace-Key": "s3cret"}).json()
+    assert len(body["traces"]) == 1

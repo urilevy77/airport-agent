@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -133,22 +133,32 @@ def create_app(conversation_factory=None, static_dir=DEFAULT_STATIC):
             given = request.headers.get("X-Trace-Key", "")
             return hmac.compare_digest(trace_key, given)
 
-        # 404, never 403: a prober cannot tell a wrong key from a missing route.
-        missing = JSONResponse({"error": "Not found."}, status_code=404)
+        # 404, never 403, and the SAME 404 Starlette raises for a genuinely
+        # unmatched route (body {"detail": "Not Found"}) — a custom body here
+        # would let a prober tell "wrong key" apart from "no such route" even
+        # though both are status 404. Raising, not returning, is what gets the
+        # identical body: FastAPI's default handler renders any HTTPException
+        # this way, so this is indistinguishable from routing's own 404.
+        def missing():
+            raise HTTPException(status_code=404)
 
         @app.get("/api/traces")
         def list_traces(request: Request, limit: int = 50, offset: int = 0):
             if not authorised(request):
-                return missing
-            return {"traces": trace_store.recent(limit=min(limit, 200),
+                missing()
+            # Clamp both ends: SQLite treats a negative LIMIT as "no limit",
+            # which would silently defeat the 200-row cap.
+            return {"traces": trace_store.recent(limit=max(1, min(limit, 200)),
                                                  offset=max(offset, 0))}
 
         @app.get("/api/traces/{trace_id}")
         def one_trace(request: Request, trace_id: str):
             if not authorised(request):
-                return missing
+                missing()
             record = trace_store.get(trace_id)
-            return record if record else missing
+            if not record:
+                missing()
+            return record
 
     # LAST: mounting "/" ahead of the routes above would shadow them. Conditional
     # because a fresh checkout and CI have no build, and an unconditional mount
