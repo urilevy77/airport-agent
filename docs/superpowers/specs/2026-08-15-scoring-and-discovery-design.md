@@ -1,8 +1,17 @@
-# Candidate scoring and discovery — design
+# Candidate scoring, discovery, and data currency — design
 
-Replace the expansion-candidate score with a percentile-normalised, explicitly
-weighted one, and add a national screening tool so the agent can *find*
-candidate airports instead of only ranking a list the model recalled.
+Two independent changes to the same agent, sharing no files:
+
+1. **Scoring and discovery** — replace the expansion-candidate score with a
+   percentile-normalised, explicitly weighted one, and add a national screening
+   tool so the agent can *find* candidate airports instead of only ranking a
+   list the model recalled.
+2. **Data currency** — tell the model, from measurement rather than assumption,
+   which months it is actually looking at.
+
+---
+
+# Part 1 — Candidate scoring and discovery
 
 ## Goal
 
@@ -221,9 +230,137 @@ time and hardcoded numbers rot. Added to `selftest.py`.
 `TESTS.md:68` ("BOS first, scores 74–90") is stale once scores become
 percentile-based, and the file needs a `find_candidates` routing row.
 
+---
+
+# Part 2 — Data currency
+
+## Goal
+
+The agent should never describe months it has no data for, and should be able
+to say how far behind "now" its numbers are. Independent of Part 1: different
+files, no overlap, either can ship first.
+
+## What exists today
+
+- `backend/bts.py:55` — `fetch_recent_months()` takes the newest 6 months on
+  record. Nothing anywhere states which months those are.
+- `backend/prompts.py:14` — `SYSTEM` is a module-level constant. It contains no
+  date of any kind.
+- `backend/kpis.py:182` — `latest_complete_year()` already detects the newest
+  complete year rather than hardcoding it. The right pattern; applied in only
+  one place.
+
+### The defect, measured
+
+As of 2026-08-15 the newest month in the table is **2026-04**: a **4-month
+publication lag**. So `get_congestion("SFO")` averages 2025-11 through 2026-04
+and reports it as "recent months" — actually Thanksgiving through early spring,
+including the winter holiday peak. Nothing tells the reader that.
+
+A question phrased "how has SFO done over the last six months?" means
+March–August to the user and November–April to the tool. Nothing currently
+notices these are different windows.
+
+## Decisions
+
+**The current date alone would make this worse, not better.** The failure is
+not that the model lacks a calendar; it is that the model does not know how
+stale the data is. Given only today's date, a model asked about "recent"
+traffic in August will fluently narrate spring and summer while looking at
+November–April. The date makes the misdescription more confident, not less.
+The as-of must be *measured from the table* and shipped alongside the date.
+
+**Measure the newest month, don't compute it.** One query,
+`$select=max(reporting_month)`, verified at 0.86s, cached per process — BTS
+publishes monthly, so per-process caching is right for the data as-of. The
+calendar date is not cacheable and must be read per request. Same discipline as
+`latest_complete_year()`: detect, never hardcode.
+
+**The data's clock wins over the calendar's.** For this dataset "last year"
+means the newest *complete year in the table* (2025), not the previous calendar
+year. The prompt must say which clock governs relative expressions, or "last
+year" resolves against training-era assumptions.
+
+**Build the block per request in `Conversation.__init__`, not at import.**
+Interpolating a date into the module-level `SYSTEM` constant freezes it at
+import — on Render that is the date of the last deploy, drifting further wrong
+every day the process stays up. No new plumbing is needed: `server/app.py:95`
+already rebuilds the prompt server-side each request, and
+`server/sanitize.py:6` never accepts a client-supplied `system` message, so
+stored browser histories are unaffected by the change.
+
+**Date precision, not timestamp precision, and place it last.** A
+second-precision timestamp in the system prompt invalidates the Anthropic
+prompt cache on every request. Day precision invalidates it daily. Appending
+the volatile block to the *end* of the system content keeps the static ~1.5k
+token prefix cacheable.
+
+## Architecture
+
+### `backend/bts.py`
+
+Add `newest_month()` → `'2026-04'`, via `$select=max(reporting_month)`, cached
+by the existing `api()`.
+
+### `backend/prompts.py`
+
+`SYSTEM` stays a constant. Add `coverage_block(today)` returning the volatile
+text, and `system_prompt(today=None)` returning `SYSTEM + coverage_block(...)`.
+Keeping `SYSTEM` intact means `tests/conftest.py` and any caller wanting the
+static text are unaffected.
+
+The block:
+
+```
+DATA COVERAGE — measured from the table, never assumed.
+Today is 2026-08-15. BTS T-100 publishes with a lag.
+Newest month on record: 2026-04. Newest COMPLETE year: 2025.
+"Recent months" means 2025-11 through 2026-04 — name those months.
+You have NO data for the last 4 months. Never describe them as measured.
+"Last year" and similar phrases mean the newest COMPLETE year in the data
+(2025), not the previous calendar year.
+```
+
+### `backend/agent.py`
+
+`Conversation.__init__` (`agent.py:54`) calls `system_prompt()` instead of
+reading `SYSTEM`. One line; the per-request freshness follows from the existing
+per-request construction.
+
+*Cost accepted:* constructing a `Conversation` now performs up to two cached
+BTS queries. Both are sub-second and cached per process, so only the first
+request after a deploy pays. If that proves noticeable, the fallback is to omit
+the coverage block rather than block the request — a missing block degrades to
+today's behaviour.
+
+## Testing
+
+- `newest_month()` returns `YYYY-MM`, and is ≥ the newest complete year's
+  January and ≤ today
+- the lag stated in the block equals the measured difference between
+  `newest_month()` and the injected date — not a hardcoded 4
+- the window named in the block matches what `fetch_recent_months()` actually
+  returns, so the prompt cannot drift from the tool
+- `coverage_block(today)` is a pure function of an injected date, so it is
+  testable without freezing the clock
+- `SYSTEM` remains importable and unchanged, so `tests/conftest.py` still works
+
+`TESTS.md` gains a row: asking about "the last six months" must get an answer
+that names the months covered, not a silent substitution.
+
+---
+
 ## Out of scope
 
-`origin_airport_name` and `origin_city_name` give a real code↔name mapping,
-which is the raw material for making IATA resolution a data lookup rather than
-a model guess. Worth doing — it is the one remaining place where training
-knowledge enters the data path — but it is a separate change.
+**IATA resolution.** `origin_airport_name` and `origin_city_name` give a real
+code↔name mapping, which is the raw material for making resolution a data
+lookup rather than a model guess. Worth doing — it is the one remaining place
+where training knowledge enters the data path — but it is a separate change.
+
+**The trim-versus-reuse conflict.** `agent.py:83` drops the oldest messages
+past 40, while `prompts.py:31` instructs the model to reuse earlier tool
+results instead of re-fetching. Once trimming has removed those results the
+instruction still stands, which is an invitation to answer from training
+knowledge in exactly the situation the prompt was written to prevent. Fixing it
+means either trimming less aggressively or keeping a compact
+facts-established ledger that survives trimming. Not addressed here.
