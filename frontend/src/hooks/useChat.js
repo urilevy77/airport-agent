@@ -10,7 +10,7 @@ export default function useChat() {
   const [selectedChartId, setSelectedChartId] = useState(null)
   const [status, setStatus] = useState('idle')
 
-  // The OpenAI message list, kept OUT of React state on purpose: it is not
+  // The model's message list, kept OUT of React state on purpose: it is not
   // rendered, and it must never be confused with the display messages above.
   const llmHistory = useRef([])
   const lastQuestion = useRef('')

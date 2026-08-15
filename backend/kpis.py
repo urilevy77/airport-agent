@@ -12,17 +12,21 @@ model, and the web charts render the same numbers.
 
     Signal 1  congestion(rows)        how full are the flights, right now?
     Signal 2  growth(by_year(rows))   which direction, and how fast?
-    Signal 3  score(b) / verdict(b)   which airport to pick? (reuses 1 + 2)
+    Signal 3  screen_metrics/score    which airport to pick? (1 + 2, nationally)
     Signal 4  mix(rows)               what KIND of passenger?
     Signal 5  national_rank(airport)  how big, nationally? (aggregated queries)
+
+Signal 3 is measured across EVERY US airport at once rather than per airport:
+its components are percentiles, and a percentile needs a population.
 
 The four raw facts the whole model rests on: passengers, seats, departures, load
 factor — plus a domestic split and an average trip distance.
 
 SOURCE  BTS r495-tyji, live JSON API. Query layer lives in bts.py.
 """
-from bts import (DEFAULT_MONTHS, api, by_year, fetch_all_months, full_year,
-                 month_of, num, parallel, pct)
+import bisect
+
+from bts import (api, full_year, load_factor, month_of, num, parallel, pct)
 
 # ---------------------------------------------------------------- Signal 1
 def congestion(rows):
@@ -79,38 +83,107 @@ def growth(y):
 
 
 # ---------------------------------------------------------------- Signal 3
-def blocks(airport):
-    """Signal 1 + Signal 2 for one airport, from a SINGLE fetch.
+# The three scored components and what each is worth. ONE source of truth: the
+# design doc quotes these numbers, and selftest asserts against them.
+#
+# Fullness is the largest single input, but growth and unmet demand together
+# outweigh it. `vs19` is deliberately NOT here — being below 2019 changes how
+# the growth number should be READ (refilling old capacity, not exceeding it),
+# which makes it a qualifier on the verdict, not independent evidence.
+WEIGHTS = {"lf": 0.40, "cagr": 0.30, "gap": 0.30}
 
-    The full history already contains the recent months, so Signal 1's window is
-    sliced off the tail instead of re-requesting it. Returns None when the airport
-    has no rows, so callers can separate MISSING from LOW-SCORING — reporting a
-    missing airport as a bad candidate would be a lie.
+STRONG, MODERATE = 75, 55       # score bands for verdict()
+
+
+def percentile(sorted_values, x):
+    """Where x falls in an ALREADY SORTED population, 0-100.
+
+    The share of the population x is at least as good as. Used instead of raw
+    units because the components have incomparable scales and unbounded tails:
+    load factor spans ~8 points across the whole country while passenger growth
+    reaches +35%/yr, so summing them raw let one outlier decide the ranking.
+    A percentile caps that by construction.
     """
-    rows = fetch_all_months(airport)
-    if not rows:
+    return bisect.bisect_right(sorted_values, x) / len(sorted_values) * 100
+
+
+def screen_metrics(rows, year, base_year, prior_year=2019):
+    """National rows -> {code: {pax, lf, cagr, seat_cagr, gap, vs19}}.
+
+    PURE: takes the rows national_table() returns, does no I/O of its own.
+
+    An airport missing the baseline year gets None for its growth fields, never
+    0.0 — a zero would read as a flat airport and be scored as one. Airports
+    with no row for `year` are dropped: we have nothing current to say.
+    """
+    seen = {}
+    for r in rows:
+        seen.setdefault(r["origin_airport_code"], {})[int(r["year"])] = {
+            "pax": num(r["pax"]), "seats": num(r["seats"])}
+
+    span = year - base_year
+    out = {}
+    for code, years in seen.items():
+        now = years.get(year)
+        if not now or now["pax"] <= 0 or now["seats"] <= 0:
+            continue
+        m = {"pax": now["pax"], "lf": load_factor(now["pax"], now["seats"]),
+             "cagr": None, "seat_cagr": None, "gap": None, "vs19": None}
+        base = years.get(base_year)
+        if base and base["pax"] > 0 and base["seats"] > 0 and span > 0:
+            m["cagr"] = ((now["pax"] / base["pax"]) ** (1 / span) - 1) * 100
+            m["seat_cagr"] = ((now["seats"] / base["seats"]) ** (1 / span) - 1) * 100
+            # THE investment signal: passengers outgrowing seats means demand
+            # the airport cannot absorb. Negative means airlines are fixing it.
+            m["gap"] = m["cagr"] - m["seat_cagr"]
+        was = years.get(prior_year)
+        if was and was["pax"] > 0:
+            m["vs19"] = pct(now["pax"], was["pax"])
+        out[code] = m
+    return out
+
+
+def reference(metrics, min_pax):
+    """The population percentiles are measured against: (sorted values, count).
+
+    Only airports big enough to be worth a terminal, and only those with the
+    full history to place on all three axes. Everything else would distort the
+    distribution that decides everyone's score.
+
+    The floor filters the REFERENCE, not what can be scored — an airport below
+    it can still be placed on this population, which is what lets us answer
+    about a small airport the user named without dropping it silently.
+    """
+    pop = [m for m in metrics.values()
+           if m["pax"] >= min_pax and m["gap"] is not None]
+    return {k: sorted(m[k] for m in pop) for k in WEIGHTS}, len(pop)
+
+
+def percentiles(m, ref):
+    """This airport's percentile on each scored component."""
+    return {k: percentile(ref[k], m[k]) for k in WEIGHTS if m.get(k) is not None}
+
+
+def score(m, ref):
+    """0-100: how strong an expansion candidate, against the reference population.
+
+    None when the airport lacks the history to place on all three axes —
+    scoring it as 0 would rank a data gap as a bad investment.
+    """
+    if any(m.get(k) is None for k in WEIGHTS):
         return None
-    c = congestion(rows[-DEFAULT_MONTHS:])                # Signal 1
-    g = growth(by_year(rows)) or {}                       # Signal 2
-    return {"airport": airport, "lf": c["avg"],
-            "cagr": g.get("cagr"), "gap": g.get("gap"), "vs19": g.get("vs19")}
+    p = percentiles(m, ref)
+    return sum(WEIGHTS[k] * p[k] for k in WEIGHTS)
 
 
-def score(b):
-    """Full now + growing + unmet demand.
-
-    KNOWN LIMITATION: these are raw units on different scales, so load factor
-    (70-90) dominates and the gap contributes 0-2. Ranking order is sound;
-    the absolute number is not meaningful. Needs normalizing.
-    """
-    return b["lf"] + (b["cagr"] or 0.0) + max(b["gap"] or 0.0, 0.0)
-
-
-def verdict(b):
-    strong = b["lf"] >= 82 and (b["cagr"] or 0) > 0 and (b["gap"] or 0) > 0
-    v = "STRONG candidate" if strong else \
-        "moderate" if b["lf"] >= 78 and (b["cagr"] or 0) >= -1 else "weak"
-    if b["vs19"] is not None and b["vs19"] < 0:
+def verdict(m, ref):
+    """The score in words, plus the one qualifier that changes how to read it."""
+    s = score(m, ref)
+    if s is None:
+        return "not enough history to score"
+    v = "STRONG candidate" if s >= STRONG else \
+        "moderate" if s >= MODERATE else "weak"
+    if m.get("vs19") is not None and m["vs19"] < 0:
         v += " (still recovering)"
     return v
 

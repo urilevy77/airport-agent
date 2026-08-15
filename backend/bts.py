@@ -67,6 +67,37 @@ def fetch_all_months(airport):
     return api(origin_airport_code=airport, **{"$order": "reporting_month"})
 
 
+def national_table(years):
+    """Passengers, seats and departures for EVERY US origin airport, per year.
+
+    ONE request for the whole country: Socrata sums server-side, so screening
+    ~1,500 airports costs the same as asking about one. This is what makes
+    finding candidates possible rather than only ranking a list someone
+    supplied — and being cached by api(), a second candidate question in the
+    same conversation is free.
+    """
+    listed = ",".join(f"'{y}'" for y in sorted(set(years)))
+    return api(**{"$select": "origin_airport_code,year,"
+                             "sum(total_passengers) as pax,"
+                             "sum(total_seats) as seats,"
+                             "sum(total_departures) as deps",
+                  "$where": f"year in ({listed})",
+                  "$group": "origin_airport_code,year",
+                  "$order": "pax DESC", "$limit": 10000})
+
+
+def newest_month():
+    """'2026-04' — the newest month on record, measured not assumed.
+
+    BTS publishes T-100 months behind, and the size of that lag is not
+    something the calendar can tell you. Without this the agent describes
+    whatever it fetched as "recent" and lets the reader supply their own idea
+    of which months that means.
+    """
+    rows = api(timeout=60, **{"$select": "max(reporting_month) as newest"})
+    return rows[0]["newest"][:7]
+
+
 # ---------- numbers ----------
 def num(x):
     """Coerce an API field to float; missing/garbage -> 0.0."""

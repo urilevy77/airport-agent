@@ -23,11 +23,14 @@ import json
 import sys
 import time
 
-from bts import by_year, fetch_all_months, fetch_recent_months
-from kpis import (blocks, congestion, growth, haul, latest_complete_year, mix,
-                  national_rank, profile, score, tier_of, verdict)
-from tools import (TOOL_SCHEMAS, TOOLS, get_candidate, get_congestion,
-                   get_growth, get_national_rank, get_traffic_mix)
+from bts import (DEFAULT_MONTHS, by_year, fetch_all_months, fetch_recent_months,
+                 newest_month)
+from kpis import (WEIGHTS, congestion, growth, haul, latest_complete_year, mix,
+                  national_rank, profile, reference, score, tier_of, verdict)
+from prompts import SYSTEM, system_prompt
+from tools import (FLOOR, TOOL_SCHEMAS, TOOLS, find_candidates, get_candidate,
+                   get_congestion, get_growth, get_national_rank,
+                   get_traffic_mix, screen)
 
 ok = fail = 0
 
@@ -73,10 +76,6 @@ def kpi_checks(code):
             check("Signal 2  gap == pax cagr - seat cagr",
                   abs(g["gap"] - (g["cagr"] - g["seat_cagr"])) < 1e-9)
 
-    b = blocks(code)                                                 # Signal 3
-    check("Signal 3  blocks + score", b is not None and isinstance(score(b), float))
-    check("Signal 3  verdict is a phrase", isinstance(verdict(b), str) and verdict(b))
-
     m = mix(rows)                                                    # Signal 4
     check("Signal 4  international share 0-100", 0 <= m["intl_pct"] <= 100,
           f"{m['intl_pct']:.1f}")
@@ -102,23 +101,101 @@ def rank_checks(code):
               str(r["of_airports"]))
 
 
+# ---------------------------------------------------------------- Signal 3
+def screen_checks():
+    """The national screen: the population, the percentiles, and the score.
+
+    Checks PROPERTIES, not places. Which airport ranks first changes with every
+    BTS release; that a fuller, faster-growing airport outranks an emptier one
+    must not.
+    """
+    head("Signal 3  national screen")
+    year, metrics = screen()
+    ref, n = reference(metrics, FLOOR)
+    check("weights sum to 1", abs(sum(WEIGHTS.values()) - 1) < 1e-9, str(WEIGHTS))
+    check("whole country screened", len(metrics) > 800, f"{len(metrics)} airports")
+    check("investable population is a sane slice", 40 < n < 400, f"{n} above floor")
+
+    scored = {c: score(m, ref) for c, m in metrics.items()
+              if score(m, ref) is not None}
+    check("scores are percentages", all(0 <= s <= 100 for s in scored.values()))
+
+    # Raising the floor can only ever shrink the reference population.
+    sizes = [reference(metrics, f)[1] for f in (0, FLOOR, 5_000_000, 20_000_000)]
+    check("a higher floor never grows the population", sizes == sorted(sizes, reverse=True),
+          str(sizes))
+
+    # THE regression. GUM once ranked 2nd on a 69.6% load factor because an
+    # unbounded growth outlier outweighed it. A sub-25th-percentile load factor
+    # now caps the score below any plausible leader, by arithmetic.
+    cap = WEIGHTS["lf"] * 25 + WEIGHTS["cagr"] * 100 + WEIGHTS["gap"] * 100
+    weak_lf = sorted(ref["lf"])[:max(len(ref["lf"]) // 4, 1)]
+    worst = [c for c, m in metrics.items()
+             if c in scored and m["lf"] <= weak_lf[-1] and m["pax"] >= FLOOR]
+    check("an empty airport cannot top the ranking",
+          all(scored[c] <= cap for c in worst),
+          f"{len(worst)} airports below the 25th percentile on load factor")
+
+    top = max(scored, key=scored.get)
+    check("the leader is not below-average on fullness",
+          metrics[top]["lf"] >= sorted(ref["lf"])[len(ref["lf"]) // 2],
+          f"{top} lf {metrics[top]['lf']:.1f}")
+    check("the leader gets a phrase, not a bare number",
+          isinstance(verdict(metrics[top], ref), str) and verdict(metrics[top], ref))
+    check("an unscorable airport says so rather than ranking last",
+          "not enough" in verdict({"lf": 80.0, "cagr": None, "gap": None,
+                                   "pax": 1e6, "vs19": None}, ref).lower())
+    check("as-of year is the newest complete one", year == latest_complete_year())
+
+
+# ---------------------------------------------------------------- data coverage
+def coverage_checks():
+    """The prompt must describe the window the tools really return."""
+    head("data coverage (what the prompt tells the model)")
+    newest = newest_month()
+    check("newest month looks like YYYY-MM", len(newest) == 7 and newest[4] == "-",
+          newest)
+
+    prompt = system_prompt()
+    check("coverage block is appended to the static rules",
+          prompt.startswith(SYSTEM) and "DATA COVERAGE" in prompt)
+    check("the static rules are unchanged by building it",
+          "DATA COVERAGE" not in SYSTEM)
+    check("the prompt names the newest month", newest in prompt, newest)
+
+    # The prompt claims a window; the tool returns one. They must be the same,
+    # or the agent describes months it is not holding.
+    rows = fetch_recent_months("SFO")
+    first = rows[0]["reporting_month"][:7]
+    last = rows[-1]["reporting_month"][:7]
+    check("prompt window == what fetch_recent_months returns",
+          f"{first} through {last}" in prompt, f"tool gave {first}..{last}")
+    check("window is DEFAULT_MONTHS long", len(rows) == DEFAULT_MONTHS, str(len(rows)))
+
+
 # ---------------------------------------------------------------- tools layer
 def tool_checks():
     head("tools layer (what the model actually calls)")
-    check("5 tools registered", len(TOOLS) == 5, str(sorted(TOOLS)))
-    check("5 schemas", len(TOOL_SCHEMAS) == 5)
+    check("6 tools registered", len(TOOLS) == 6, str(sorted(TOOLS)))
+    check("6 schemas", len(TOOL_SCHEMAS) == 6)
     for s in TOOL_SCHEMAS:
-        f = s["function"]
-        check(f"schema {f['name']}: named + described + params",
-              f["name"] in TOOLS and len(f["description"]) > 40
-              and f["parameters"]["required"])
+        # Flat name/description/input_schema — the shape the Messages API wants.
+        # This block used to read s["function"]["parameters"] and died on a
+        # KeyError, so none of it ran.
+        check(f"schema {s['name']}: named + described + params",
+              s["name"] in TOOLS and len(s["description"]) > 40
+              and "properties" in s["input_schema"])
+    finder = [s for s in TOOL_SCHEMAS if s["name"] == "find_candidates"][0]
+    check("find_candidates is callable with no arguments",
+          finder["input_schema"]["required"] == [])
 
     # Every result must survive json.dumps — it is sent to the model and browser.
     for name, res in [("get_congestion", get_congestion("SFO")),
                       ("get_growth", get_growth("SFO")),
                       ("get_traffic_mix", get_traffic_mix("JFK")),
                       ("get_national_rank", get_national_rank("PWM")),
-                      ("get_candidate", get_candidate(["BOS", "PVD"]))]:
+                      ("get_candidate", get_candidate(["BOS", "PVD"])),
+                      ("find_candidates", find_candidates())]:
         try:
             json.dumps(res)
             check(f"{name} JSON-serialisable", True)
@@ -142,6 +219,30 @@ def tool_checks():
     check("get_candidate sorted best-first", scores == sorted(scores, reverse=True),
           str(scores))
 
+    # Discovery: the tool that answers "which airports should we invest in".
+    found = find_candidates(limit=7)
+    ranked = found["ranked"]
+    check("find_candidates honours limit", len(ranked) <= 7, str(len(ranked)))
+    check("find_candidates sorted best-first",
+          [a["score"] for a in ranked] == sorted((a["score"] for a in ranked),
+                                                 reverse=True))
+    check("find_candidates returns only airports above the floor",
+          all(a["passengers"] >= FLOOR for a in ranked),
+          str([a["passengers"] for a in ranked]))
+    check("every candidate carries raw value AND percentile",
+          all(a["load_factor_percentile"] is not None
+              and a["annual_load_factor"] is not None for a in ranked))
+    check("a raised floor returns bigger airports",
+          min(a["passengers"] for a in find_candidates(
+              min_annual_passengers=5_000_000)["ranked"]) >= 5_000_000)
+
+    # Both tools must agree: one scoring path, or the ranking contradicts itself.
+    shared = ranked[0]["airport"]
+    named = get_candidate([shared])["ranked"][0]
+    check("find_candidates and get_candidate agree on a score",
+          named["score"] == ranked[0]["score"],
+          f"{shared}: {named['score']} vs {ranked[0]['score']}")
+
 
 def failure_checks():
     head("failure modes (must not invent data)")
@@ -157,6 +258,18 @@ def failure_checks():
           [a["airport"] for a in mixed["ranked"]] == ["BOS"])
     check("mixed batch lists the missing one", mixed.get("not_found") == ["MYC"])
 
+    # A small airport is a DIFFERENT finding from a missing one. It still gets
+    # measured and ranked; it is only flagged as too small to suggest.
+    tiny = get_candidate(["BOS", "HII"])
+    check("a below-floor airport is still scored, not dropped",
+          "HII" in [a["airport"] for a in tiny["ranked"]],
+          str([a["airport"] for a in tiny["ranked"]]))
+    check("a below-floor airport is flagged as such",
+          tiny.get("below_investment_floor") == ["HII"],
+          str(tiny.get("below_investment_floor")))
+    check("a below-floor airport is NOT reported as missing",
+          "HII" not in (tiny.get("not_found") or []))
+
 
 if __name__ == "__main__":
     codes = [a.upper() for a in sys.argv[1:]] or ["SFO", "JFK"]
@@ -165,6 +278,8 @@ if __name__ == "__main__":
     for code in codes:
         kpi_checks(code)
     rank_checks(codes[0])
+    screen_checks()
+    coverage_checks()
     tool_checks()
     failure_checks()
     print(f"\n{ok} passed, {fail} failed   ({time.time() - t0:.1f}s)")

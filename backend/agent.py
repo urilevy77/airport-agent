@@ -8,22 +8,19 @@ signal runs against BTS r495-tyji, and the model writes the answer.
 This file owns ONLY the loop and the memory. The other pieces live next door:
     tools.py    the five tools + their schemas  (what the agent can DO)
     prompts.py  the system prompt              (how the agent BEHAVES)
+    llm.py      the model provider              (WHO answers, and in what shape)
 
-SETUP   pip install openai
-        export OPENAI_API_KEY=...          # and optionally OPENAI_MODEL
+SETUP   pip install anthropic
+        export ANTHROPIC_API_KEY=...       # and optionally ANTHROPIC_MODEL
 RUN     python3 agent.py "Compare LA and Santa Ana congestion"
         python3 agent.py                    # interactive
 """
 import json
-import os
 import sys
 
-from openai import OpenAI
-
-from prompts import SYSTEM
+from llm import Client
+from prompts import system_prompt
 from tools import TOOL_SCHEMAS, TOOLS
-
-MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 
 # ---------- MEMORY: a list of dicts, resent in full on every call ----------
 MAX_MESSAGES = 40        # kept after the system prompt; ~10 tool-using turns
@@ -36,8 +33,9 @@ def call_tool(call):
     {"error": ...} the model can read and recover from, instead of killing
     the conversation and losing all history.
     """
+    function = call["function"]
     try:
-        result = TOOLS[call.function.name](**json.loads(call.function.arguments))
+        result = TOOLS[function["name"]](**json.loads(function["arguments"]))
     except Exception as e:
         result = {"error": f"{type(e).__name__}: {e}"}
     return json.dumps(result)
@@ -51,9 +49,12 @@ class Conversation:
     """
 
     def __init__(self, model=None):
-        self.client = OpenAI()
-        self.model = model or MODEL
-        self.messages = [{"role": "system", "content": SYSTEM}]
+        self.client = Client(model)
+        self.model = self.client.model
+        # Built here, not imported as a constant: the prompt states today's date
+        # and how stale the table is, and a Conversation is constructed per
+        # request (server/app.py), which is what keeps both fresh.
+        self.messages = [{"role": "system", "content": system_prompt()}]
 
     def say(self, role, content, **extra):
         """Append one message to memory."""
@@ -63,22 +64,24 @@ class Conversation:
         self.say("user", question)
         for _ in range(MAX_ROUNDS):
             msg = self._next_message()
-            if not msg.tool_calls:
+            calls = msg.get("tool_calls")
+            if not calls:
                 self.trim()                  # only safe once the turn has settled
-                return msg.content
-            for call in msg.tool_calls:
-                self.say("tool", call_tool(call), tool_call_id=call.id)
+                return msg["content"]
+            for call in calls:
+                self.say("tool", call_tool(call), tool_call_id=call["id"])
         return "Stopped after too many tool rounds."
 
     def _next_message(self):
-        """One model call. The reply is normalised to a plain dict before it
-        lands in memory, so self.messages stays uniformly JSON-serialisable
-        (exclude_none drops the SDK's refusal/audio/function_call nulls)."""
-        resp = self.client.chat.completions.create(
-            model=self.model, messages=self.messages, tools=TOOL_SCHEMAS)
-        msg = resp.choices[0].message
-        self.messages.append(msg.model_dump(exclude_none=True))
-        return msg
+        """One model call. llm.py hands back a plain dict, so self.messages
+        stays uniformly JSON-serialisable — that is what lets the whole history
+        round-trip through the browser and back."""
+        message = self.client.complete(
+            system=self.messages[0]["content"],   # the system prompt is not a message
+            messages=self.messages[1:],
+            tools=TOOL_SCHEMAS)
+        self.messages.append(message)
+        return message
 
     def trim(self):
         """Drop oldest messages, keeping the system prompt.

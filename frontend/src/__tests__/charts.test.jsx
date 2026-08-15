@@ -38,16 +38,52 @@ test('growth chart captions the latest year and the growth rate', () => {
   expect(screen.getByText(/\+4.3%/)).toBeInTheDocument()
 })
 
+const RANKED = [
+  { airport: 'BOS', score: 88.1, verdict: 'STRONG candidate', annual_load_factor: 84.0,
+    load_factor_percentile: 92, growth_per_year_pct: 3.1, vs_2019_pct: 1.2 },
+  { airport: 'PVD', score: 61.0, verdict: 'moderate', annual_load_factor: 80.0,
+    load_factor_percentile: 55, growth_per_year_pct: 0.2, vs_2019_pct: -4.0 },
+]
+
 test('candidate chart lists every ranked airport', () => {
   render(<InlineChart chart={{
     id: 'c3', tool: 'get_candidate', args: { airports: ['BOS', 'PVD'] },
-    data: { ranked: [
-      { airport: 'BOS', score: 88.1, verdict: 'STRONG candidate', load_factor: 84.0,
-        growth_per_year_pct: 3.1, vs_2019_pct: 1.2 },
-      { airport: 'PVD', score: 85.3, verdict: 'weak', load_factor: 85.0,
-        growth_per_year_pct: 0.2, vs_2019_pct: -4.0 }] },
+    data: { as_of_year: 2025, ranked: RANKED },
   }} />)
-  expect(screen.getByText(/2 airports ranked/i)).toBeInTheDocument()
+  expect(screen.getByText(/2 airports scored 0–100/i)).toBeInTheDocument()
+})
+
+test('candidate chart names the population the percentiles are against', () => {
+  render(<InlineChart chart={{
+    id: 'c3b', tool: 'get_candidate', args: { airports: ['BOS', 'PVD'] },
+    data: { as_of_year: 2025, ranked: RANKED,
+            population: { airports: 144, min_annual_passengers: 500000 } },
+  }} />)
+  expect(screen.getByText(/144 US airports carrying at least 0\.5M/i)).toBeInTheDocument()
+})
+
+test('find_candidates draws the same ranking chart', () => {
+  render(<InlineChart chart={{
+    id: 'c3c', tool: 'find_candidates', args: { limit: 10 },
+    data: { as_of_year: 2025, ranked: RANKED },
+  }} />)
+  expect(screen.getByText(/2 airports scored 0–100/i)).toBeInTheDocument()
+})
+
+test('a below-floor airport is called small, not missing', () => {
+  render(<InlineChart chart={{
+    id: 'c3d', tool: 'get_candidate', args: { airports: ['BOS', 'PVD'] },
+    data: { as_of_year: 2025, ranked: RANKED, below_investment_floor: ['HII'] },
+  }} />)
+  expect(screen.getByText(/HII carry too few passengers to suggest/i)).toBeInTheDocument()
+})
+
+test('an empty ranking explains itself instead of drawing nothing', () => {
+  render(<InlineChart chart={{
+    id: 'c3e', tool: 'find_candidates', args: {},
+    data: { ranked: [], note: 'No airports could be ranked.' },
+  }} />)
+  expect(screen.getByText(/No airports could be ranked/i)).toBeInTheDocument()
 })
 
 test('traffic mix chart shows the international share', () => {

@@ -50,7 +50,7 @@ def test_orphaned_leading_tool_message_is_dropped_before_asking(client):
     holds its tool_call_id. If a client-supplied history starts with one (e.g.
     the matching assistant message aged out, or was tampered with),
     server.sanitize.prepare_history() must strip it before ask() runs, or the
-    OpenAI API 400s on the orphan. (Conversation.trim() cannot provide this
+    API 400s on the orphan. (Conversation.trim() cannot provide this
     guarantee at this call site — see the comment in server/app.py.)"""
     body = client.post("/chat", json={
         "history": [
@@ -82,11 +82,11 @@ def test_agent_failure_returns_502_with_a_readable_message(client, fake):
 
 
 def test_construction_failure_returns_502_with_a_readable_message():
-    """Conversation.__init__ builds an OpenAI() client eagerly (backend/agent.py),
+    """Conversation.__init__ builds the Anthropic client eagerly (backend/llm.py),
     so a missing or malformed API key raises at construction time, before ask()
     is ever called. That must still surface as a readable JSON 502 — not an
     unhandled 500 — because this is exactly the first-deploy mistake (forgetting
-    to set OPENAI_API_KEY on Render), and the frontend can't parse a non-JSON
+    to set ANTHROPIC_API_KEY on Render), and the frontend can't parse a non-JSON
     body."""
     from fastapi.testclient import TestClient
 

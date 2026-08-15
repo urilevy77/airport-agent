@@ -1,7 +1,7 @@
 # Debugging map — question → expected tool
 
 ```bash
-export OPENAI_API_KEY=...
+export ANTHROPIC_API_KEY=...
 ./run.sh                 # web UI
 python3 agent.py         # terminal
 python3 selftest.py      # data layer only — no API key needed
@@ -40,7 +40,8 @@ tools. Each draws a different chart, so the sequence shows all five visuals.
 |---|---|---|---|
 | 1 | How congested is SFO? | `get_congestion` | 6 monthly columns, peak in amber |
 | 2 | Is LAX growing? | `get_growth` | passengers per year, 2014→ |
-| 3 | Rank BOS, PVD, MHT and BDL | `get_candidate` | ranked bars, leader in green |
+| 3 | Which airports should we invest in? | `find_candidates` | ranked bars, leader in green |
+| 3b | Rank BOS, PVD, MHT and BDL | `get_candidate` | same chart, named airports only |
 | 4 | Is JFK an international airport? | `get_traffic_mix` | one split bar |
 | 5 | Is PWM a major airport? | `get_national_rank` | position on a log scale |
 | + | Denver or JFK for an international terminal? | `get_traffic_mix` ×2 | two split bars, side by side |
@@ -53,7 +54,7 @@ screen: the average printed in the congestion note must equal the mean of its ow
 bars, and the growth curve's last year must equal the year quoted in the answer.
 
 Columns start at 50% and candidate bars at the low score, because both sit in
-narrow bands (70–90% load factor, 74–90 score) that a 0-based axis flattens.
+narrow bands (70–90% load factor) that a 0-based axis flattens.
 The rank scale is logarithmic — rank 10 and rank 95 are both hard against the
 left edge otherwise.
 
@@ -63,11 +64,19 @@ left edge otherwise.
 
 | Ask | Should call | Should mention |
 |---|---|---|
-| How congested is SFO? | `get_congestion` | ~81% load factor, peak month |
+| How congested is SFO? | `get_congestion` | ~81% load factor, and WHICH months |
 | Is LAX growing? | `get_growth` | +3.9%/yr, slowing, still below 2019 |
-| Rank BOS, PVD and MHT as expansion candidates | `get_candidate` | BOS first, scores 74–90 |
+| Which US airports should we invest in? | `find_candidates` | a ranking it did not nominate itself |
+| Rank BOS, PVD and MHT as expansion candidates | `get_candidate` | BOS first, scores 0–100 |
 | Is JFK an international airport? | `get_traffic_mix` | 53% international, global gateway |
 | Is PWM a major airport? | `get_national_rank` | rank 95 of 1,311, mid-size |
+
+**The one to watch is `find_candidates`.** If a broad "where should we invest"
+question fires `get_candidate` instead, the model nominated the airports itself
+— from training knowledge — and only the *ordering* of that guess was measured.
+The answer then cannot contain an airport it did not already think of, which is
+the entire failure this tool exists to prevent. Check the `(debug)` panel for
+which one ran.
 
 ## 2. Routing — two tools, one turn
 
@@ -98,6 +107,20 @@ printed at the user. That means the model had nothing readable to quote.
 The second one is a real bug we fixed. The model substituted BDL for MYC and
 called it "PVD's nearby airport" — MYC never reached a tool, so `found=false`
 never fired.
+
+## 4b. Data currency — must name the months
+
+The table lags ~4 months, so "recent" is not the recent the reader pictures.
+
+| Ask | Correct behaviour | Bug if it does this |
+|---|---|---|
+| How busy is SFO recently? | names the window (e.g. "Nov 2025 – Apr 2026") | says "recent months" and leaves it |
+| How did BOS do over the last six months? | says which six months it has, not the six before today | silently answers about a different window |
+| How is SFO doing this month? | says the table does not go up to this month | answers with the newest months it has |
+
+The load factor from `get_congestion` (6 months) and from the candidate tools
+(annual) will differ slightly for the same airport. Quoting both without saying
+which window each covers is the bug.
 
 ## 5. Coverage limits — must refuse
 

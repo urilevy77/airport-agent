@@ -7,17 +7,40 @@ with a chart drawn from the numbers it actually measured.
 
 ## Run it locally
 
+Put your key in a `.env` file in the project root (gitignored, loaded
+automatically via `python-dotenv`):
+
+```
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+macOS / Linux:
+
 ```bash
 pip install -r requirements.txt
 cd frontend && npm install && cd ..
-export OPENAI_API_KEY=...
 ./run.sh                 # API on :5001, app on http://localhost:5173
 ```
+
+Windows (PowerShell) — `run.sh` is bash-only; use the PowerShell twin. Run it
+from a terminal, not by double-clicking:
+
+```powershell
+pip install -r requirements.txt
+cd frontend; npm install; cd ..
+.\run.ps1                # API on :5001, app on http://localhost:5173
+```
+
+If scripts are blocked by the execution policy, use
+`powershell -ExecutionPolicy Bypass -File .\run.ps1`. To start the two
+processes by hand instead, run `python -m uvicorn server.app:app --port 5001
+--reload` in one terminal and `cd frontend; npm run dev` in another.
 
 ## Layout
 
 ```
-backend/     the agent: conversation loop, five tools, KPI calculations (pure)
+backend/     the agent: conversation loop, six tools, KPI calculations (pure)
+             llm.py is the only file that talks to a model provider (Claude)
 server/      FastAPI: POST /chat, GET /health, serves the built frontend
 frontend/    React + Vite dashboard: chat, voice input, Recharts charts
 docs/        design spec, implementation plan, voice test checklist
@@ -53,6 +76,8 @@ python3 -m pytest              # server: sanitize, charts, tracing, /chat, stati
 cd frontend && npm test        # UI: chat state, composer, voice, charts
 python3 backend/selftest.py    # 54 invariant checks against live BTS (no key needed)
 ```
+
+On Windows, replace `python3` with `python` and swap `&&` for `;` in PowerShell.
 
 `backend/selftest.py` asserts invariants, not fixed numbers — BTS adds a month
 at a time, so hardcoded values would rot.

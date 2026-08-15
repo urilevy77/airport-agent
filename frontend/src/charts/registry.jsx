@@ -5,13 +5,18 @@ import NationalRankChart from './NationalRankChart'
 import TrafficMixChart from './TrafficMixChart'
 
 // One entry per tool. Adding a signal means adding one entry here and one file.
+// find_candidates and get_candidate return the same `ranked` shape — one screens
+// the country, the other scores a named list — so they share a chart.
 export const CHART_REGISTRY = {
   get_congestion: { label: 'Congestion', Component: CongestionChart },
   get_growth: { label: 'Growth', Component: GrowthChart },
+  find_candidates: { label: 'Candidates', Component: CandidateChart },
   get_candidate: { label: 'Candidates', Component: CandidateChart },
   get_traffic_mix: { label: 'Traffic mix', Component: TrafficMixChart },
   get_national_rank: { label: 'National rank', Component: NationalRankChart },
 }
+
+const RANKING_TOOLS = ['find_candidates', 'get_candidate']
 
 export const CHART_LABELS = Object.fromEntries(
   Object.entries(CHART_REGISTRY).map(([tool, { label }]) => [tool, label]))
@@ -37,7 +42,7 @@ export function InlineChart({ chart }) {
     return <div className="chart-error">{data.error || 'No data for this airport.'}</div>
   }
   // A ranking has no `found` flag; an empty one has nothing to draw.
-  if (chart.tool === 'get_candidate' && !(data.ranked || []).length) {
+  if (RANKING_TOOLS.includes(chart.tool) && !(data.ranked || []).length) {
     return <div className="chart-error">{data.note || 'No airports could be ranked.'}</div>
   }
 

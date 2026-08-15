@@ -1,4 +1,4 @@
-"""A fake Conversation, so the endpoint tests need no OpenAI key and no network."""
+"""A fake Conversation, so the endpoint tests need no API key and no network."""
 import json
 
 import pytest

@@ -17,7 +17,7 @@ services:
     startCommand: python3 -m uvicorn server.app:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
-      - key: OPENAI_API_KEY
+      - key: ANTHROPIC_API_KEY
         sync: false          # set in the Render dashboard, never in git
       - key: PYTHON_VERSION
         value: "3.13.3"

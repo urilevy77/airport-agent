@@ -8,6 +8,10 @@ import os
 import time
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -22,7 +26,7 @@ DEFAULT_STATIC = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
 def create_app(conversation_factory=None, static_dir=DEFAULT_STATIC):
     """Build the app. `conversation_factory` is injectable so tests can run the
-    whole endpoint without an OpenAI key or a network call."""
+    whole endpoint without an API key or a network call."""
     if conversation_factory is None:
         from server.agent_bridge import Conversation
         conversation_factory = Conversation
@@ -35,11 +39,11 @@ def create_app(conversation_factory=None, static_dir=DEFAULT_STATIC):
         if not question:
             return JSONResponse({"error": "Ask a question first."}, status_code=400)
 
-        # Conversation.__init__ builds an OpenAI() client eagerly (backend/agent.py),
+        # Conversation.__init__ builds the Anthropic client eagerly (backend/llm.py),
         # so a missing or malformed API key raises at construction time, not at
         # ask() time. This needs its own guard to surface as a readable JSON 502
         # instead of an unhandled 500 — especially critical for the first-deploy
-        # mistake of forgetting to set OPENAI_API_KEY on Render.
+        # mistake of forgetting to set ANTHROPIC_API_KEY on Render.
         try:
             convo = conversation_factory()
         except Exception as e:

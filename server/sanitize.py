@@ -52,7 +52,7 @@ def _drop_invalid_tool_messages(messages):
 
     A leading tool message ([tool, ...]) or one following a user message
     ([user, tool]) has no assistant tool_calls to answer, so it is dropped —
-    the OpenAI API 400s on an orphan like that. A genuine tool_calls message
+    the API 400s on an orphan like that. A genuine tool_calls message
     followed by its matching tool result is kept untouched, including when an
     assistant message carries several parallel tool_calls in one turn.
     """

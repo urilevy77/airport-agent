@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-tools.py — the five tools the model can activate, and their OpenAI schemas.
+tools.py — the five tools the model can activate, and their schemas.
 
 Each tool is a thin wrapper that turns a signal module into STRUCTURED data
 (a dict), never printed text: the model reads these results, so they must be
@@ -12,9 +12,11 @@ TWO EXPORTS the agent needs:
 
 Add a signal by writing one wrapper + one schema() entry — nothing else changes.
 """
-from bts import by_year, fetch_all_months, fetch_recent_months, full_year, parallel
-from kpis import (blocks, congestion, growth, haul, mix, national_rank, profile,
-                  score, verdict)
+from bts import (by_year, fetch_all_months, fetch_recent_months, full_year,
+                 national_table)
+from kpis import (congestion, growth, haul, latest_complete_year, mix,
+                  national_rank, percentiles, profile, reference, score,
+                  screen_metrics, verdict)
 
 def rnd(v, digits=1):
     """Round floats for the model; pass ints/None/strings through untouched."""
@@ -117,34 +119,110 @@ def get_growth(airport):
                    for yr in sorted(y) if full_year(y, yr)],
     }
 
-def get_candidate(airports):
-    """Rank the codes we have data for; list unknown ones separately so the
-    model never presents a missing airport as a low-scoring one.
+# ---------- Signal 3: the national screen, shared by both candidate tools ----------
+FLOOR = 500_000     # default minimum annual passengers to SUGGEST an airport
+TOP_N = 10
 
-    One fetch per airport, all in parallel — blocks() returns None for a code
-    with no rows, which is what separates missing from low-scoring.
+def screen():
+    """(year, metrics-for-every-US-airport) as of the newest complete year.
+
+    ONE cached query behind both candidate tools, so discovery and ranking can
+    never disagree, and asking a second candidate question costs nothing.
     """
-    results = parallel(blocks, airports)
-    found = [b for b in results if b]
-    missing = [code for code, b in zip(airports, results) if not b]
-    ranked = sorted(found, key=score, reverse=True)
-    # The four signals BEHIND the score, so the model can explain a ranking instead of
-    # reciting it. Without these it only ever sees "score 85.3, weak" and cannot say
-    # why one airport beats another. Already computed by blocks() — no extra work.
-    result = {"ranked": [{"airport": b["airport"], "score": rnd(score(b)),
-                          "verdict": verdict(b),
-                          "load_factor": rnd(b["lf"]),
-                          "growth_per_year_pct": rnd(b["cagr"]),
-                          # A SENTENCE, not a number: the model read the bare gap as a
-                          # capacity level and reported "demand is below seated
-                          # capacity (-0.8%)", inverting the meaning. It is a rate
-                          # comparison, so it has to arrive already interpreted.
-                          "demand_vs_seats": airline_response_phrase(b["gap"]),
-                          "vs_2019_pct": rnd(b["vs19"])} for b in ranked]}
+    year = latest_complete_year()
+    base = year - 3
+    return year, screen_metrics(national_table([2019, base, year]), year, base)
+
+def pct_of(p, key):
+    """A percentile as a whole number — 87, not 87.32. The extra digits imply a
+    precision a rank among 144 airports does not have."""
+    return int(round(p[key])) if key in p else None
+
+def entry(code, m, ref):
+    """One ranked airport: every score component as a raw value AND a percentile.
+
+    Both, deliberately. The raw number is the fact; the percentile is what makes
+    it mean anything ("82.4%" is meaningless until you know the country sits
+    between 74 and 82).
+    """
+    p = percentiles(m, ref)
+    return {"airport": code,
+            "score": rnd(score(m, ref)),
+            "verdict": verdict(m, ref),
+            "passengers": int(m["pax"]),
+            # ANNUAL, unlike get_congestion's rolling 6 months. Named so the
+            # model cannot quietly treat the two as the same measurement.
+            "annual_load_factor": rnd(m["lf"]),
+            "load_factor_percentile": pct_of(p, "lf"),
+            "growth_per_year_pct": rnd(m["cagr"]),
+            "growth_percentile": pct_of(p, "cagr"),
+            # A SENTENCE, not a number: the model read the bare gap as a
+            # capacity level and reported "demand is below seated capacity
+            # (-0.8%)", inverting the meaning. It is a rate comparison, so it
+            # has to arrive already interpreted.
+            "demand_vs_seats": airline_response_phrase(m["gap"]),
+            "demand_percentile": pct_of(p, "gap"),
+            "vs_2019_pct": rnd(m["vs19"])}
+
+def ranking_of(codes, metrics, ref, year, floor, limit=None):
+    """Shared tail of both tools: score, sort, and describe the population."""
+    ranked = sorted((c for c in codes if score(metrics[c], ref) is not None),
+                    key=lambda c: score(metrics[c], ref), reverse=True)
+    if limit:
+        ranked = ranked[:limit]
+    return {"as_of_year": year,
+            "population": {"airports": reference(metrics, floor)[1],
+                           "min_annual_passengers": floor,
+                           "note": f"Scores are percentiles against US airports "
+                                   f"with at least {floor:,} passengers in {year}."},
+            "ranked": [entry(c, metrics[c], ref) for c in ranked]}
+
+def find_candidates(min_annual_passengers=FLOOR, limit=TOP_N):
+    """Screen EVERY US airport and return the best expansion candidates.
+
+    The tool that makes the headline question answerable from data: without it
+    the model has to nominate the airports itself, from memory, and only the
+    ranking of that guess is measured.
+    """
+    floor = max(int(min_annual_passengers or FLOOR), 0)
+    limit = min(max(int(limit or TOP_N), 1), 50)
+    year, metrics = screen()
+    ref, _ = reference(metrics, floor)
+    pool = [c for c, m in metrics.items() if m["pax"] >= floor]
+    return ranking_of(pool, metrics, ref, year, floor, limit)
+
+def get_candidate(airports):
+    """Rank codes the USER named, against the same national population.
+
+    Airports are separated into three buckets rather than one ranking, because
+    "no data", "too small to suggest" and "low scoring" are three different
+    findings and collapsing them would let the model report a missing airport
+    as a bad one.
+    """
+    codes = [a.strip().upper() for a in airports]
+    year, metrics = screen()
+    ref, _ = reference(metrics, FLOOR)
+
+    known = [c for c in codes if c in metrics]
+    missing = [c for c in codes if c not in metrics]
+    thin = [c for c in known if score(metrics[c], ref) is None]
+    below = [c for c in known if metrics[c]["pax"] < FLOOR]
+
+    result = ranking_of(known, metrics, ref, year, FLOOR)
     if missing:
         result["not_found"] = missing
         result["note"] = ("No BTS data for these codes - they are excluded from the "
                           "ranking, NOT ranked low. Verify them and retry.")
+    if below:
+        result["below_investment_floor"] = below
+        result["floor_note"] = (
+            f"These are scored and ranked, but carry fewer than {FLOOR:,} "
+            f"passengers a year - small enough that a terminal project is "
+            f"probably not the right question. Say so.")
+    if thin:
+        result["insufficient_history"] = thin
+        result["history_note"] = ("Too few years of data to score these. They are "
+                                  "listed, NOT ranked low.")
     return result
 
 def get_national_rank(airport):
@@ -184,6 +262,14 @@ def get_traffic_mix(airport):
     if not rows:
         return not_found(airport)
     m = mix(rows)
+    if not m:
+        # Rows exist but carry no passengers — a freight-only or dormant month.
+        # Dereferencing None here used to raise, and the model saw a raw
+        # TypeError instead of something it could explain.
+        return {"airport": airport, "found": True,
+                "error": f"{airport} has rows but no passengers in the last "
+                         f"{len(rows)} months, so there is no traffic mix to "
+                         "report. It may be freight-only or currently dormant."}
     label, why = profile(m["intl_pct"])
     hl, hwhy = haul(m["avg_miles"])
     return {"airport": airport, "found": True,
@@ -200,13 +286,27 @@ ONE_AIRPORT = {"airport": {"type": "string", "description": "IATA code, e.g. SFO
 MANY_AIRPORTS = {"airports": {"type": "array", "items": {"type": "string"},
                               "description": "IATA codes, e.g. ['BOS','BDL','PVD']"}}
 
-def schema(fn, description, properties):
-    """Wrap one tool in the shape the OpenAI API expects."""
-    return {"type": "function", "function": {
-        "name": fn.__name__,
-        "description": description,
-        "parameters": {"type": "object", "properties": properties,
-                       "required": list(properties)}}}
+SCREEN_ARGS = {
+    "min_annual_passengers": {
+        "type": "integer",
+        "description": "Smallest airport worth suggesting, by passengers per "
+                       "year. Default 500000. Raise it (e.g. 5000000) when the "
+                       "user clearly means large airports."},
+    "limit": {"type": "integer",
+              "description": "How many airports to return. Default 10."}}
+
+def schema(fn, description, properties, required=None):
+    """Wrap one tool in the shape the Messages API expects.
+
+    `required` defaults to every property — right for the airport-code tools,
+    where a missing code means the model guessed. Pass it explicitly for tools
+    with real defaults, so the model can call them with no arguments at all.
+    """
+    return {"name": fn.__name__,
+            "description": description,
+            "input_schema": {"type": "object", "properties": properties,
+                             "required": list(properties) if required is None
+                                         else required}}
 
 TOOL_SCHEMAS = [
     schema(get_congestion,
@@ -219,10 +319,20 @@ TOOL_SCHEMAS = [
            "slowing, and whether airlines are adding seats fast enough to keep up. "
            "Returns plain-English sentences - quote them rather than the raw numbers.",
            ONE_AIRPORT),
+    schema(find_candidates,
+           "Signal 3a. SEARCH every US airport for the best terminal-expansion "
+           "candidates and return the top ones ranked. Use this whenever the user "
+           "has NOT named specific airports - 'which airports should we invest in', "
+           "'find me candidates', 'where should we build', 'best expansion "
+           "opportunities'. Do NOT nominate airports yourself and rank those: this "
+           "tool measures all ~1,500 of them, which is the entire point.",
+           SCREEN_ARGS, required=[]),
     schema(get_candidate,
-           "Signal 3. Score/rank one or more airports as terminal-expansion candidates "
-           "(full now + growing + demand outrunning capacity). Pass several codes to "
-           "compare a region.",
+           "Signal 3b. Score/rank the SPECIFIC airports the user named as "
+           "terminal-expansion candidates (full now + growing + demand outrunning "
+           "capacity), against the same national population find_candidates uses. "
+           "Use when codes or places are given - 'compare BOS and PVD', 'rank the "
+           "New England airports'. If no airports were named, use find_candidates.",
            MANY_AIRPORTS),
     schema(get_traffic_mix,
            "Signal 4. What KIND of traffic an airport has: international vs domestic "
@@ -241,5 +351,5 @@ TOOL_SCHEMAS = [
 ]
 
 TOOLS = {fn.__name__: fn for fn in
-         (get_congestion, get_growth, get_candidate, get_traffic_mix,
-          get_national_rank)}
+         (get_congestion, get_growth, find_candidates, get_candidate,
+          get_traffic_mix, get_national_rank)}
