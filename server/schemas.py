@@ -1,4 +1,4 @@
-"""The wire contract. One endpoint, three fields each way."""
+"""The wire contract for /chat and the trace read API."""
 from typing import Any
 
 from pydantic import BaseModel, Field

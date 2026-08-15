@@ -126,6 +126,29 @@ def test_rounds_increment_across_tool_rounds(monkeypatch):
     assert [s["round"] for s in rec.steps] == [1, 1, 2, 2, 3]
 
 
+def test_a_tool_call_missing_the_arguments_key_is_recorded_and_survives(monkeypatch):
+    """Before this branch, a tool-call dict missing structural keys (not just a
+    malformed arguments JSON string) was caught by call_tool()'s own broad
+    except guard. step_args(call) now runs BEFORE call_tool(), outside that
+    guard — it must degrade to {} on its own rather than raising a KeyError
+    that would kill the whole turn."""
+    monkeypatch.setattr(agent, "TOOLS",
+                        {"get_congestion": lambda: {"load_factor": 80.9}})
+    rec = Recorder()
+    malformed_call = {"id": "c1", "type": "function",
+                      "function": {"name": "get_congestion"}}  # no "arguments"
+    convo = build(monkeypatch, [
+        {"role": "assistant", "content": "", "tool_calls": [malformed_call]},
+        ANSWER,
+    ], recorder=rec)
+    answer = convo.ask("How congested is SFO?")
+
+    assert answer == "SFO runs about 81% full."
+    tools = [s for s in rec.steps if s["kind"] == "tool"]
+    assert tools[0]["name"] == "get_congestion"
+    assert tools[0]["args"] == {}
+
+
 def test_null_recorder_leaves_behaviour_identical(monkeypatch):
     """The entire justification for the coupling in agent.py. If this fails, the
     tradeoff the design accepted no longer holds."""

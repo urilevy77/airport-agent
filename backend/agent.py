@@ -34,8 +34,8 @@ def call_tool(call):
     {"error": ...} the model can read and recover from, instead of killing
     the conversation and losing all history.
     """
-    function = call["function"]
     try:
+        function = call["function"]
         result = TOOLS[function["name"]](**json.loads(function["arguments"]))
     except Exception as e:
         result = {"error": f"{type(e).__name__}: {e}"}
@@ -44,10 +44,14 @@ def call_tool(call):
 def step_args(call):
     """A tool call's arguments as a dict, for the trace. Arguments arrive as a
     JSON string and a malformed one must not break a turn — it certainly must
-    not break the recording of one."""
+    not break the recording of one. A structurally malformed call dict (no
+    "function" key, or "arguments" missing entirely) must degrade the same
+    way, not raise a KeyError that kills the whole turn — this is called
+    BEFORE call_tool()'s own try/except guard, so it has no recovery net of
+    its own."""
     try:
-        return json.loads(call["function"]["arguments"])
-    except (ValueError, TypeError):
+        return json.loads((call.get("function") or {})["arguments"])
+    except (ValueError, TypeError, KeyError):
         return {}
 
 def step_outcome(raw):
@@ -100,8 +104,9 @@ class Conversation:
                 # The timing wraps call_tool from OUT HERE, where the recorder
                 # already lives, so call_tool itself stays the pure function it
                 # was and its recovery guard is untouched.
-                with self.recorder.step("tool", name=call["function"]["name"],
-                                        args=step_args(call)) as step:
+                with self.recorder.step(
+                        "tool", name=(call.get("function") or {}).get("name"),
+                        args=step_args(call)) as step:
                     output = call_tool(call)
                     step.set(**step_outcome(output))
                 self.say("tool", output, tool_call_id=call["id"])

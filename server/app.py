@@ -2,7 +2,11 @@
 
 STATELESS by design: the browser keeps its own history and replays it each
 turn, so no visitor can see another's conversation, any process can answer any
-request, and a restart never wipes a conversation mid-demo.
+request, and a restart never wipes a conversation mid-demo. This applies to
+the /chat endpoint's own conversation state only — every turn is now also
+persisted server-side to a SQLite trace store (server/trace_store.py) and
+readable across sessions through a key-gated /api/traces API; see the
+"Registered only when TRACE_KEY is set" block below for how that's defended.
 """
 import hmac
 import os
@@ -55,6 +59,11 @@ def create_app(conversation_factory=None, static_dir=DEFAULT_STATIC):
             trace("construction_error", error=f"{type(e).__name__}: {e}")
             return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=502)
 
+        # Assigned rather than passed: conversation_factory keeps its zero-argument
+        # contract, so the existing test doubles in tests/conftest.py still work.
+        recorder = Recorder()
+        convo.recorder = recorder
+
         # prepare_history() (server/sanitize.py) is what guarantees no orphaned
         # 'tool' message reaches the model — Conversation.trim() below cannot
         # provide that guarantee at this call site, because its orphan-strip
@@ -62,11 +71,6 @@ def create_app(conversation_factory=None, static_dir=DEFAULT_STATIC):
         # here (MAX_MESSAGES == MAX_HISTORY == 40, and we never append more
         # than 40 client messages). trim() is kept only in case a future
         # change makes conversations grow past that cap within a single call.
-        # Assigned rather than passed: conversation_factory keeps its zero-argument
-        # contract, so the existing test doubles in tests/conftest.py still work.
-        recorder = Recorder()
-        convo.recorder = recorder
-
         convo.messages += prepare_history(request.history)
         convo.trim()
 
@@ -115,8 +119,18 @@ def create_app(conversation_factory=None, static_dir=DEFAULT_STATIC):
 
         # Everything except the system prompt: the client stores this and replays
         # it next turn, and our prompt is rebuilt server-side each time.
-        return ChatResponse(answer=answer, charts=charts,
-                            history=convo.messages[1:], trace=record)
+        #
+        # A trace must never break a request: if building the response with the
+        # trace attached ever fails (e.g. a future schema mismatch on `record`),
+        # a fully successful turn must still come back to the user — just
+        # without the trace field — rather than 500ing on a technicality.
+        try:
+            return ChatResponse(answer=answer, charts=charts,
+                                history=convo.messages[1:], trace=record)
+        except Exception as e:
+            trace("trace_response_error", error=f"{type(e).__name__}: {e}")
+            return JSONResponse({"answer": answer, "charts": charts,
+                                 "history": convo.messages[1:]})
 
     @app.get("/health")
     def health():
@@ -130,8 +144,19 @@ def create_app(conversation_factory=None, static_dir=DEFAULT_STATIC):
     if trace_key:
 
         def authorised(request):
-            given = request.headers.get("X-Trace-Key", "")
-            return hmac.compare_digest(trace_key, given)
+            # Anything that goes wrong while comparing — including a non-ASCII
+            # byte in the header, which Starlette's latin-1 header decoding
+            # lets through even though some HTTP clients refuse to send one —
+            # must fail closed (False), not raise. hmac.compare_digest() raises
+            # TypeError on non-ASCII strings, and an uncaught exception here
+            # would surface as a 500 that a prober could tell apart from the
+            # 404 a genuinely unmatched route returns — the same auth-bypass
+            # oracle this whole block exists to close. Broad except on purpose.
+            try:
+                given = request.headers.get("X-Trace-Key", "")
+                return hmac.compare_digest(trace_key, given)
+            except Exception:
+                return False
 
         # 404, never 403, and the SAME 404 Starlette raises for a genuinely
         # unmatched route (body {"detail": "Not Found"}) — a custom body here
@@ -143,9 +168,24 @@ def create_app(conversation_factory=None, static_dir=DEFAULT_STATIC):
             raise HTTPException(status_code=404)
 
         @app.get("/api/traces")
-        def list_traces(request: Request, limit: int = 50, offset: int = 0):
+        def list_traces(request: Request, limit: str = "50", offset: str = "0"):
+            # limit/offset are typed str, not int: FastAPI would otherwise
+            # reject a non-numeric value with its own automatic 422 BEFORE the
+            # authorised() check below ever runs — a malformed query string
+            # would then distinguish "TRACE_KEY is configured here" (422) from
+            # "no tracing API at all" (404) without needing the key. Parsing
+            # happens by hand, after the auth check, and a parse failure just
+            # degrades to the default rather than raising.
             if not authorised(request):
                 missing()
+            try:
+                limit = int(limit)
+            except (TypeError, ValueError):
+                limit = 50
+            try:
+                offset = int(offset)
+            except (TypeError, ValueError):
+                offset = 0
             # Clamp both ends: SQLite treats a negative LIMIT as "no limit",
             # which would silently defeat the 200-row cap.
             return {"traces": trace_store.recent(limit=max(1, min(limit, 200)),
