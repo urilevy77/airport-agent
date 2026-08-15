@@ -24,6 +24,7 @@ export default function App() {
           <ChatColumn
             messages={chat.messages}
             charts={chat.charts}
+            traces={chat.traces}
             selectedChartId={chat.selectedChartId}
             onSelectChart={chat.selectChart}
             status={chat.status}

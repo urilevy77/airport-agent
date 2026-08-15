@@ -16,20 +16,19 @@ the routing block in `prompts.py` — not in `agent.py`.
 
 ## Seeing what actually ran
 
-Add `(debug)` to the end of any question in the web UI:
+Every answer carries a collapsed trace line beneath it — `3 signals · 2 rounds ·
+4.2s`. Click it for the tools that ran, in rounds, with their arguments, their
+durations and their raw JSON (behind a second `raw` toggle).
 
-```
-Which New England airport is the best expansion candidate? (debug)
-```
+It is read from the server's record of the turn, not from the model — asking the
+model what it used lets it misremember or invent a call it never made.
 
-You get a dashed panel under the answer listing every tool call, its arguments,
-and the full JSON it returned (click to expand). It's read from the server's
-record of the turn, not from the model — asking the model what it used lets it
-misremember or invent a call it never made.
-
-**`no tool was called` is the finding to watch for.** It means the answer came
-from training knowledge, not your data. That's what produced the bad "best
+**`No signal was measured` is the finding to watch for.** It means the answer
+came from training knowledge, not your data. That's what produced the bad "best
 airports in the US" answer: confident prose, zero measurements.
+
+Past turns, including failed ones, are at `/#traces?key=...` when `TRACE_KEY` is
+set. See the tracing section of the README.
 
 ## Demo sequence
 
@@ -45,9 +44,9 @@ tools. Each draws a different chart, so the sequence shows all five visuals.
 | 4 | Is JFK an international airport? | `get_traffic_mix` | one split bar |
 | 5 | Is PWM a major airport? | `get_national_rank` | position on a log scale |
 | + | Denver or JFK for an international terminal? | `get_traffic_mix` ×2 | two split bars, side by side |
-| + | Is SFO growing but losing ground? `(debug)` | `get_growth` + `get_national_rank` | curve + scale, plus the raw trace |
+| + | Is SFO growing but losing ground? | `get_growth` + `get_national_rank` | curve + scale; open the trace line for the raw calls |
 
-Charts are drawn from the tool's returned JSON — the same `trace` the debug panel
+Charts are drawn from the tool's returned JSON — the same `trace` the trace line
 shows — never from the model's prose. **A chart that disagrees with the text is
 therefore a tool bug, not a rendering bug.** Two things are worth checking on
 screen: the average printed in the congestion note must equal the mean of its own
@@ -75,7 +74,7 @@ left edge otherwise.
 question fires `get_candidate` instead, the model nominated the airports itself
 — from training knowledge — and only the *ordering* of that guess was measured.
 The answer then cannot contain an airport it did not already think of, which is
-the entire failure this tool exists to prevent. Check the `(debug)` panel for
+the entire failure this tool exists to prevent. Check the trace line for
 which one ran.
 
 ## 2. Routing — two tools, one turn

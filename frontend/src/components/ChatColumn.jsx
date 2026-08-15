@@ -2,9 +2,10 @@ import { useEffect, useRef } from 'react'
 import ChartChips from './ChartChips'
 import EmptyState from './EmptyState'
 import MessageBubble from './MessageBubble'
+import TraceDisclosure from './TraceDisclosure'
 import { InlineChart } from '../charts/registry.jsx'
 
-export default function ChatColumn({ messages, charts, selectedChartId,
+export default function ChatColumn({ messages, charts, traces, selectedChartId,
                                      onSelectChart, status, onPickStarter }) {
   const endRef = useRef(null)
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }) },
@@ -32,6 +33,7 @@ export default function ChatColumn({ messages, charts, selectedChartId,
                 <InlineChart chart={chart} />
               </div>
             ))}
+            <TraceDisclosure trace={(traces || {})[message.id]} />
           </MessageBubble>
         )
       })}

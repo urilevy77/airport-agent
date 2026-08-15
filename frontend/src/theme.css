@@ -146,3 +146,37 @@ body {
   border-radius: var(--radius); padding: 10px 12px;
 }
 .chart-placeholder { display: none; }
+
+/* --- trace -------------------------------------------------------------- */
+.trace { margin-top: 0.6rem; font-size: 0.82rem; }
+.trace > summary {
+  cursor: pointer; color: var(--muted, #6b7280);
+  list-style: none; padding: 0.15rem 0;
+}
+.trace > summary::marker, .trace > summary::-webkit-details-marker { display: none; }
+.trace > summary::before { content: '▸ '; }
+.trace[open] > summary::before { content: '▾ '; }
+.trace-empty { color: #b45309; margin: 0.4rem 0; }
+.trace-steps { margin-top: 0.4rem; }
+.trace-round { margin-bottom: 0.5rem; }
+.trace-round-label {
+  text-transform: uppercase; letter-spacing: 0.04em;
+  font-size: 0.7rem; color: var(--muted, #6b7280); margin-bottom: 0.2rem;
+}
+.trace-steps ol { list-style: none; margin: 0; padding: 0; }
+.trace-step {
+  border-left: 2px solid #d1d5db; padding: 0.2rem 0 0.2rem 0.6rem;
+  margin-bottom: 0.3rem;
+}
+.trace-step.model { border-left-color: #c7d2fe; }
+.trace-step.failed { border-left-color: #ef4444; }
+.trace-step-head { display: flex; justify-content: space-between; gap: 1rem; }
+.trace-step-name { font-family: ui-monospace, monospace; }
+.trace-step-ms { color: var(--muted, #6b7280); font-variant-numeric: tabular-nums; }
+.trace-step-args { color: var(--muted, #6b7280); font-family: ui-monospace, monospace; }
+.trace-step-error { color: #b91c1c; }
+.trace-raw > summary { cursor: pointer; color: var(--muted, #6b7280); }
+.trace-raw pre {
+  max-height: 14rem; overflow: auto; background: rgba(0, 0, 0, 0.04);
+  padding: 0.4rem; border-radius: 4px; font-size: 0.75rem;
+}
