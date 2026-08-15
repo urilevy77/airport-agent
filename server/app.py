@@ -4,6 +4,7 @@ STATELESS by design: the browser keeps its own history and replays it each
 turn, so no visitor can see another's conversation, any process can answer any
 request, and a restart never wipes a conversation mid-demo.
 """
+import hmac
 import os
 import time
 from pathlib import Path
@@ -12,7 +13,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -121,6 +122,33 @@ def create_app(conversation_factory=None, static_dir=DEFAULT_STATIC):
     def health():
         """Render polls this to decide whether the container is alive."""
         return {"ok": True}
+
+    # Registered only when TRACE_KEY is set, so a fresh checkout exposes nothing.
+    # The app is otherwise stateless by design (see the module docstring); storing
+    # traces ends that, and this is where the property is defended.
+    trace_key = os.environ.get("TRACE_KEY")
+    if trace_key:
+
+        def authorised(request):
+            given = request.headers.get("X-Trace-Key", "")
+            return hmac.compare_digest(trace_key, given)
+
+        # 404, never 403: a prober cannot tell a wrong key from a missing route.
+        missing = JSONResponse({"error": "Not found."}, status_code=404)
+
+        @app.get("/api/traces")
+        def list_traces(request: Request, limit: int = 50, offset: int = 0):
+            if not authorised(request):
+                return missing
+            return {"traces": trace_store.recent(limit=min(limit, 200),
+                                                 offset=max(offset, 0))}
+
+        @app.get("/api/traces/{trace_id}")
+        def one_trace(request: Request, trace_id: str):
+            if not authorised(request):
+                return missing
+            record = trace_store.get(trace_id)
+            return record if record else missing
 
     # LAST: mounting "/" ahead of the routes above would shadow them. Conditional
     # because a fresh checkout and CI have no build, and an unconditional mount

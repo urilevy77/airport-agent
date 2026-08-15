@@ -23,3 +23,9 @@ services:
         value: "3.13.3"
       - key: NODE_VERSION
         value: "20.11.1"
+      - key: TRACE_DB
+        value: /tmp/traces.db
+      - key: TRACE_MAX_ROWS
+        value: "2000"
+      - key: TRACE_KEY
+        sync: false      # set by hand in the dashboard; unset = no read API
