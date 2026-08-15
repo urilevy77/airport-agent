@@ -91,7 +91,16 @@ full-history fetches.
 *Cost accepted:* `get_candidate`'s load factor becomes **annual** rather than
 the rolling 6-month window `blocks()` uses today, so it can differ slightly
 from `get_congestion` for the same airport. Mitigated by naming the field
-`load_factor_<year>` and stating the difference in the prompt.
+`annual_load_factor` and stating the difference in the prompt.
+
+*Implemented as:* a static `annual_load_factor` key rather than the
+`load_factor_<year>` originally proposed. A year-dependent key name would be
+unreadable to the chart and unassertable in a test, and `as_of_year` already
+carries the date at the top level.
+
+*Follow-on:* with both tools on the shared path, `kpis.blocks()` had no
+remaining production caller and was removed rather than kept alive by its own
+test.
 
 **The size floor filters discovery, not scoring.** Percentiles are always
 computed over the above-floor population, but any airport can be *placed* on
@@ -161,8 +170,12 @@ Both return:
              "growth_per_year_pct": 8.9, "growth_percentile": 79,
              "demand_vs_seats": "<sentence>", "demand_percentile": 77,
              "vs_2019_pct": 4.2}],
- "not_found": [], "below_floor": []}
+ "not_found": [], "below_investment_floor": [], "insufficient_history": []}
 ```
+
+Three separate buckets, because "no data", "too small to suggest" and "too few
+years to score" are three different findings and collapsing them would let the
+model present any of them as a low-scoring airport.
 
 Each entry carries the raw value *and* its percentile, so the model can ground a
 claim in both. `demand_vs_seats` stays a pre-interpreted sentence via the
