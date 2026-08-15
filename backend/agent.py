@@ -20,6 +20,7 @@ import sys
 
 from llm import Client
 from prompts import system_prompt
+from recorder import NULL
 from tools import TOOL_SCHEMAS, TOOLS
 
 # ---------- MEMORY: a list of dicts, resent in full on every call ----------
@@ -40,6 +41,29 @@ def call_tool(call):
         result = {"error": f"{type(e).__name__}: {e}"}
     return json.dumps(result)
 
+def step_args(call):
+    """A tool call's arguments as a dict, for the trace. Arguments arrive as a
+    JSON string and a malformed one must not break a turn — it certainly must
+    not break the recording of one."""
+    try:
+        return json.loads(call["function"]["arguments"])
+    except (ValueError, TypeError):
+        return {}
+
+def step_outcome(raw):
+    """What call_tool returned, split into a result and an error for the trace.
+
+    call_tool never raises: a failed tool comes back as {"error": ...} that the
+    model reads and recovers from. Pulling that key out here is what lets the UI
+    mark a step failed even though the turn as a whole succeeded.
+    """
+    try:
+        result = json.loads(raw)
+    except (ValueError, TypeError):
+        result = raw
+    error = result.get("error") if isinstance(result, dict) else None
+    return {"result": result, "error": error}
+
 class Conversation:
     """Holds the conversation as self.messages — a growing list of dicts.
 
@@ -48,9 +72,12 @@ class Conversation:
     re-read earlier turns and resolve follow-ups like "and Boston?".
     """
 
-    def __init__(self, model=None):
+    def __init__(self, model=None, recorder=None):
         self.client = Client(model)
         self.model = self.client.model
+        # NULL by default: the CLI, the REPL and run() carry no tracing, and
+        # backend/ keeps working with no server and no database.
+        self.recorder = recorder or NULL
         # Built here, not imported as a constant: the prompt states today's date
         # and how stale the table is, and a Conversation is constructed per
         # request (server/app.py), which is what keeps both fresh.
@@ -63,23 +90,36 @@ class Conversation:
     def ask(self, question):
         self.say("user", question)
         for _ in range(MAX_ROUNDS):
+            self.recorder.start_round()
             msg = self._next_message()
             calls = msg.get("tool_calls")
             if not calls:
                 self.trim()                  # only safe once the turn has settled
                 return msg["content"]
             for call in calls:
-                self.say("tool", call_tool(call), tool_call_id=call["id"])
+                # The timing wraps call_tool from OUT HERE, where the recorder
+                # already lives, so call_tool itself stays the pure function it
+                # was and its recovery guard is untouched.
+                with self.recorder.step("tool", name=call["function"]["name"],
+                                        args=step_args(call)) as step:
+                    output = call_tool(call)
+                    step.set(**step_outcome(output))
+                self.say("tool", output, tool_call_id=call["id"])
         return "Stopped after too many tool rounds."
 
     def _next_message(self):
         """One model call. llm.py hands back a plain dict, so self.messages
         stays uniformly JSON-serialisable — that is what lets the whole history
         round-trip through the browser and back."""
-        message = self.client.complete(
-            system=self.messages[0]["content"],   # the system prompt is not a message
-            messages=self.messages[1:],
-            tools=TOOL_SCHEMAS)
+        with self.recorder.step("model") as step:
+            message = self.client.complete(
+                system=self.messages[0]["content"],   # the system prompt is not a message
+                messages=self.messages[1:],
+                tools=TOOL_SCHEMAS)
+            # Inside the block on purpose: recorded even if a later line throws.
+            step.set(text=message.get("content", ""),
+                     calls=[c["function"]["name"]
+                            for c in message.get("tool_calls") or []])
         self.messages.append(message)
         return message
 
