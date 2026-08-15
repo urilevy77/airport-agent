@@ -180,3 +180,19 @@ body {
   max-height: 14rem; overflow: auto; background: rgba(0, 0, 0, 0.04);
   padding: 0.4rem; border-radius: 4px; font-size: 0.75rem;
 }
+
+/* --- traces page -------------------------------------------------------- */
+.traces-page { max-width: 52rem; margin: 0 auto; padding: 2rem 1rem; }
+.traces-page h1 { font-size: 1.2rem; margin-bottom: 1rem; }
+.traces-list { list-style: none; margin: 0; padding: 0; }
+.traces-row { border-bottom: 1px solid #e5e7eb; padding: 0.5rem 0; }
+.traces-row.failed { border-left: 2px solid #ef4444; padding-left: 0.6rem; }
+.traces-row-head {
+  display: flex; flex-direction: column; gap: 0.15rem; width: 100%;
+  background: none; border: 0; padding: 0; text-align: left; cursor: pointer;
+  font: inherit; color: inherit;
+}
+.traces-question { font-weight: 600; }
+.traces-meta { font-size: 0.78rem; color: var(--muted, #6b7280); }
+.traces-answer { margin: 0.5rem 0; color: var(--muted, #6b7280); }
+.traces-detail { padding: 0.5rem 0 0.2rem; }

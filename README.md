@@ -84,11 +84,34 @@ at a time, so hardcoded values would rot.
 
 ## Tracing
 
-Every `/chat` call emits one JSON line on stdout (question, tools called, tool
-results, answer, latency), visible in Render's log viewer. It all goes through
-`trace()` in `server/tracing.py`, so switching to SQLite or a hosted tracing
-service is a one-function change. Render's free disk is ephemeral, which is why
-the default sink is stdout and not a file.
+Every turn is recorded: the tools the agent chose, the arguments it chose them
+with, what each returned, and how long each took. Scoring stays deterministic
+code — the trace shows which signals ran, never a model's account of itself.
+
+Each answer carries a collapsed line beneath it (`3 signals · 2 rounds · 4.2s`)
+that expands into the step list.
+
+Turns are also written to SQLite and readable across sessions:
+
+| Env var | Default | Effect |
+|---|---|---|
+| `TRACE_DB` | `traces.db` | Where the table lives |
+| `TRACE_MAX_ROWS` | `2000` | Oldest rows are dropped past this |
+| `TRACE_KEY` | unset | Enables the read API and `/#traces` |
+
+With `TRACE_KEY` set, past turns are at `/#traces?key=<your key>`. **Without it
+the read routes are not registered at all**, so a fresh checkout exposes
+nothing. The key sits in the URL fragment, which browsers do not send to the
+server — it stays out of access logs. This is a demo-grade guard, not
+authentication.
+
+Two sinks record each turn on purpose: the SQLite table, and one JSON line per
+turn on stdout. Render's free tier wipes the disk on redeploy, so the log stream
+is what survives when the database does not.
+
+Note that traces are stored server-side. The chat itself remains stateless — the
+browser holds its own history — but the trace table does retain every question
+asked of a deployed instance, bounded by `TRACE_MAX_ROWS`.
 
 ## What this cannot answer
 
