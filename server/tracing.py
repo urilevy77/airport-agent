@@ -1,8 +1,12 @@
-"""The single tracing sink.
+"""The stdout tracing sink.
 
-One JSON object per line on stdout, which Render captures in its log viewer.
-Render's free-tier disk is wiped on restart, so a local SQLite file would
-silently lose data — swap the write below (not the call sites) to change sinks.
+One JSON object per line, which Render captures in its log viewer.
+
+There are now TWO sinks for a turn: this one and the SQLite table in
+trace_store.py. That duplication is deliberate, not an oversight — Render's
+free tier wipes the disk on redeploy, so the log stream is what survives when
+the database does not. Do not "clean up" one of them without replacing the
+durability it provides.
 """
 import json
 from datetime import datetime, timezone
