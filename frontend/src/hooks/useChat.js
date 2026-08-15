@@ -7,6 +7,7 @@ const nextId = () => `m${++counter}`
 export default function useChat() {
   const [messages, setMessages] = useState([])
   const [charts, setCharts] = useState([])
+  const [traces, setTraces] = useState({})
   const [selectedChartId, setSelectedChartId] = useState(null)
   const [status, setStatus] = useState('idle')
 
@@ -32,6 +33,10 @@ export default function useChat() {
         ...chart, id: `${answerId}-${index}`,
       }))
       setCharts((prior) => [...prior, ...fresh])
+      // Deliberately NOT in llmHistory: that ref is replayed to the server every
+      // turn, so a trace in there would be re-uploaded on every message and would
+      // become model input — the agent reading its own timings back.
+      if (body.trace) setTraces((prior) => ({ ...prior, [answerId]: body.trace }))
       setMessages((prior) => [...prior, {
         id: answerId, role: 'agent', text: body.answer,
         chartIds: fresh.map((c) => c.id),
@@ -50,5 +55,5 @@ export default function useChat() {
   const retry = useCallback(() => send(lastQuestion.current), [send])
   const selectChart = useCallback((id) => setSelectedChartId(id), [])
 
-  return { messages, charts, selectedChartId, status, error: null, send, selectChart, retry }
+  return { messages, charts, traces, selectedChartId, status, error: null, send, selectChart, retry }
 }

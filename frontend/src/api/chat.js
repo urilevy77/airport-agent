@@ -30,3 +30,25 @@ export async function sendChat({ history, question }) {
 }
 
 export { COLD_START_MS }
+
+// The debug page reads past turns back. The key travels in a header, never in
+// the query string: the page takes it from the URL fragment, which browsers do
+// not transmit, so it stays out of the server's access logs.
+async function readTraces(path, key) {
+  const response = await fetch(path, { headers: { 'X-Trace-Key': key } })
+  if (!response.ok) {
+    throw new ChatError(
+      response.status === 404
+        ? 'No traces here — check the key in the URL.'
+        : `The server returned an error (${response.status}).`)
+  }
+  return response.json()
+}
+
+export function fetchTraces(key, { limit = 50, offset = 0 } = {}) {
+  return readTraces(`/api/traces?limit=${limit}&offset=${offset}`, key)
+}
+
+export function fetchTrace(key, id) {
+  return readTraces(`/api/traces/${encodeURIComponent(id)}`, key)
+}
