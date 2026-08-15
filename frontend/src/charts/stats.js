@@ -64,10 +64,15 @@ const BUILDERS = {
     }),
   ]),
 
+  // The share and the type are two facts, not one: "0.3% / International /
+  // domestic" reads as a contradiction when the type is stacked under the share
+  // as its note, so the type gets its own tile and the share says what it is a
+  // share OF.
   get_traffic_mix: (d) => kept([
     tile(d.international_share_pct == null ? null : pct(d.international_share_pct), {
-      label: 'International', note: d.airport_type,
+      label: 'International', note: 'of passengers',
     }),
+    tile(d.airport_type, { label: 'Airport type' }),
     tile(d.avg_trip_miles == null ? null : `${commas(d.avg_trip_miles)} mi`, {
       label: 'Average trip', note: d.trip_length,
     }),

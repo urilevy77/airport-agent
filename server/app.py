@@ -11,23 +11,36 @@ readable across sessions through a key-gated /api/traces API; see the
 import hmac
 import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import ValidationError
 
 from server import trace_store
 from server.charts import charts_from_messages
+from server.docx_export import build_document
 from server.sanitize import clip_question, prepare_history
-from server.schemas import ChatRequest, ChatResponse
+from server.schemas import ChatRequest, ChatResponse, ExportRequest
 from server.tracing import trace
 
 DEFAULT_STATIC = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+DOCX_MEDIA_TYPE = ("application/vnd.openxmlformats-officedocument"
+                   ".wordprocessingml.document")
+# Generous enough for a long conversation of 2x-scale chart captures, small
+# enough that one request cannot exhaust a free host's memory.
+MAX_EXPORT_BYTES = 32 * 1024 * 1024
+
+
+def _export_filename():
+    return f"airport-intelligence-{datetime.now(timezone.utc):%Y-%m-%d}.docx"
 
 
 def create_app(conversation_factory=None, static_dir=DEFAULT_STATIC):
@@ -164,6 +177,58 @@ def create_app(conversation_factory=None, static_dir=DEFAULT_STATIC):
             trace("trace_response_error", error=f"{type(e).__name__}: {e}")
             return JSONResponse({"answer": answer, "charts": charts,
                                  "history": convo.messages[1:]})
+
+    @app.post("/export")
+    async def export(request: Request):
+        """The conversation on screen as a .docx.
+
+        Touches neither the model nor BTS: the browser has already resolved
+        every word, number and pixel this document contains, so this route is
+        pure layout. Deliberately NOT a tool the agent can call — assembling
+        the document is deterministic work, the same category as scoring, and
+        putting it behind the model would let it re-author what it should only
+        be reporting.
+        """
+        # Checked BEFORE the body is read: the captures are base64 PNGs, so a
+        # long conversation posts megabytes, and the point of the cap is to
+        # not hold an outsized request in memory in the first place. The
+        # len() check behind it covers a client that under-declares or omits
+        # the header (chunked upload).
+        declared = request.headers.get("content-length")
+        if declared and declared.isdigit() and int(declared) > MAX_EXPORT_BYTES:
+            return JSONResponse({"error": "That conversation is too large to export."},
+                                status_code=413)
+        body = await request.body()
+        if len(body) > MAX_EXPORT_BYTES:
+            return JSONResponse({"error": "That conversation is too large to export."},
+                                status_code=413)
+
+        try:
+            payload = ExportRequest.model_validate_json(body)
+        except ValidationError as e:
+            return JSONResponse({"error": f"Malformed export request: {e.error_count()} "
+                                          f"field(s) rejected."}, status_code=400)
+
+        if not payload.turns:
+            return JSONResponse({"error": "There is nothing to export yet."},
+                                status_code=400)
+
+        try:
+            document = build_document(payload.model_dump())
+        except Exception as e:
+            error = f"{type(e).__name__}: {e}"
+            trace("export_error", error=error)
+            return JSONResponse({"error": error}, status_code=502)
+
+        trace("export", turns=len(payload.turns),
+              charts=sum(len(t.charts) for t in payload.turns), bytes=len(document))
+        return Response(
+            content=document,
+            media_type=DOCX_MEDIA_TYPE,
+            # ASCII-only filename on purpose: a non-ASCII one needs the RFC 5987
+            # filename* form, and there is nothing here worth that.
+            headers={"Content-Disposition":
+                     f'attachment; filename="{_export_filename()}"'})
 
     @app.get("/health")
     def health():

@@ -30,6 +30,12 @@
   --accent-ink: #1c5cab;
   --accent-wash: #eef4fd;
 
+  /* categorical series, for the charts drawn in CSS rather than by Recharts.
+     Same two hues as PALETTES.series in charts/palette.js — change one, change
+     both. Validated in both modes: worst adjacent CVD ΔE 24.7 light / 26.8 dark. */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+
   /* status: reserved for state, never for a series. Always beside a label. */
   --good: #0ca30c;
   --good-ink: #006300;
@@ -67,6 +73,9 @@
     --accent-ink: #6da7ec;
     --accent-wash: #16273d;
 
+    --series-1: #3987e5;
+    --series-2: #d95926;
+
     --good-ink: #0ca30c;
     --warning-ink: #fab219;
     --critical-ink: #e66767;
@@ -92,6 +101,9 @@
   --accent: #3987e5;
   --accent-ink: #6da7ec;
   --accent-wash: #16273d;
+
+  --series-1: #3987e5;
+  --series-2: #d95926;
 
   --good-ink: #0ca30c;
   --warning-ink: #fab219;
@@ -166,6 +178,29 @@ body {
 }
 .theme-toggle:hover { border-color: var(--border-strong); color: var(--ink); }
 
+.header-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+
+/* A pill rather than the toggle's circle: this one carries a word, and the
+   shared height keeps the two sitting on one line. */
+/* Same pill as New chat: two neighbouring header actions of equal weight. */
+.new-chat, .export-doc {
+  flex: none; height: 34px; padding: 0 14px;
+  font: inherit; font-size: 13px; cursor: pointer; color: var(--ink-secondary);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border); border-radius: 17px;
+  transition: border-color 120ms ease, color 120ms ease;
+}
+.new-chat:hover:not(:disabled),
+.export-doc:hover:not(:disabled) { border-color: var(--border-strong); color: var(--ink); }
+.new-chat:disabled, .export-doc:disabled { opacity: 0.45; cursor: default; }
+
+/* Beside the button rather than in the transcript: an export that fails leaves
+   nothing on screen to explain itself otherwise. */
+.export-error {
+  max-width: 28ch; font-size: 12px; line-height: 1.3;
+  color: var(--critical, #d03b3b);
+}
+
 /* Sits inside the composer bar, so the selects match the mic button's height
    and pill shape rather than the boxy header controls they replaced. */
 .model-picker { display: flex; align-items: center; gap: 6px; min-width: 0; }
@@ -195,17 +230,49 @@ body {
   .picker-select { max-width: 92px; }
 }
 
-.chat-scroll { flex: 1; overflow-y: auto; padding: var(--gap); }
+/* `contain: paint` keeps the scroller's own painting inside its box: Chrome
+   repaints only the dirty rect while scrolling, and without the containment a
+   bubble's shadow could be left behind as a trail over the row below it. */
+.chat-scroll { flex: 1; overflow-y: auto; padding: var(--gap); contain: paint; }
 
 /* --- messages ----------------------------------------------------------- */
 .bubble-row { display: flex; margin-bottom: 14px; }
 .bubble-row.user { justify-content: flex-end; }
 .bubble {
-  max-width: 84%; padding: 12px 16px; border-radius: var(--radius);
+  max-width: 84%; min-width: 0; padding: 12px 16px; border-radius: var(--radius);
   border: 1px solid var(--border); background: var(--surface);
   box-shadow: var(--shadow);
 }
-.bubble p { margin: 0; white-space: pre-wrap; }
+/* pre-wrap alone honours the model's line breaks but will NOT break inside a
+   long unbroken token — an airport slug list or a URL would run straight out
+   through the right edge of the bubble. `anywhere` is the only wrap value that
+   also lets such a token shrink the flex item rather than overflow it. */
+.bubble p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Blocks inside one answer: the blank line between them is the separation, so
+   only the gap BETWEEN siblings is set — never a trailing margin that would
+   pad the bottom of the bubble. */
+/* `.bubble` is in the selector to outrank `.bubble p { margin: 0 }` above —
+   two classes beat one class + one element, and without it every block would
+   sit flush against the next. */
+.bubble .md > * + * { margin-top: 10px; }
+.bubble strong { font-weight: 600; }
+/* Emphasis in a user bubble is already on the accent fill, so it inherits;
+   only the agent's own surface gets the ink step. */
+.bubble.agent strong { color: var(--ink); }
+.bubble code {
+  font-family: var(--mono); font-size: 0.88em;
+  padding: 1px 5px; border-radius: 4px;
+  background: var(--surface-sunken); border: 1px solid var(--border);
+}
+/* The user bubble is a saturated fill: a sunken-surface chip on top of it would
+   read as a hole, so code there is a translucent lift of the fill itself. */
+.bubble.user code { background: rgba(255, 255, 255, 0.18); border-color: transparent; }
+.md-h {
+  margin: 0; font-size: 13px; font-weight: 600; letter-spacing: 0.01em;
+}
+.md-list { margin: 0; padding-left: 20px; }
+.md-list li { margin-bottom: 4px; }
+.md-list li:last-child { margin-bottom: 0; }
 .bubble.user {
   background: var(--accent); border-color: var(--accent); color: #fff;
   border-bottom-right-radius: 4px;
@@ -393,6 +460,26 @@ body {
   font-size: 12px; color: var(--ink-secondary);
 }
 .legend-key i { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+.swatch-1 { background: var(--series-1); }
+.swatch-2 { background: var(--series-2); }
+
+/* --- traffic mix: a two-segment proportion bar --------------------------- */
+/* Says what the length MEANS before the reader has to guess it from a legend. */
+.mix-lede {
+  margin: 0 0 8px; font-size: 12px; color: var(--ink-secondary);
+}
+/* The track is the whole (all passengers); the segments divide it. `gap` is the
+   2px surface separator between fills — a gap, never a border on the marks. */
+.mix-bar {
+  display: flex; gap: 2px; width: 100%; height: 26px; margin-bottom: 12px;
+}
+.mix-seg { display: block; min-width: 0; border-radius: 2px; }
+/* The outer ends stay rounded to the card's small radius, so the bar reads as
+   one object that has been divided rather than as two bars set side by side. */
+.mix-seg:first-child { border-start-start-radius: 6px; border-end-start-radius: 6px; }
+.mix-seg:last-child { border-start-end-radius: 6px; border-end-end-radius: 6px; }
+.mix-seg.intl { background: var(--series-1); }
+.mix-seg.dom { background: var(--series-2); }
 
 /* --- leader panel: the top candidate's detail, under its bar ------------- */
 .leader { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }

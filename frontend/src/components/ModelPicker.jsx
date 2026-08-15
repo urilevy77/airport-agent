@@ -1,9 +1,10 @@
 // Lives in the composer bar, next to the mic, so the choice sits where the
 // question is asked rather than in a header the user stops looking at.
 //
-// model/effort default to '' (not a value in `models`/`efforts`), meaning "let
-// the server pick" — the <select>'s first option is always the default, so
-// there's no separate placeholder entry to keep in sync with the list.
+// Every option here is a REAL model/effort id — there is no "Default" entry.
+// The selects open on Sonnet and medium (App picks them once /config lands), so
+// the control always names what the next turn will actually run on rather than
+// deferring to a server default the user can't see.
 export default function ModelPicker({ models, efforts, model, effort, onModelChange, onEffortChange }) {
   if (models.length === 0 && efforts.length === 0) return null
 
@@ -17,7 +18,6 @@ export default function ModelPicker({ models, efforts, model, effort, onModelCha
           aria-label="Model"
           title="Model"
         >
-          <option value="">Default model</option>
           {models.map((m) => (
             <option key={m.id} value={m.id}>{m.label}</option>
           ))}
@@ -31,7 +31,6 @@ export default function ModelPicker({ models, efforts, model, effort, onModelCha
           aria-label="Effort"
           title="Reasoning effort"
         >
-          <option value="">Default effort</option>
           {efforts.map((e) => (
             <option key={e} value={e}>{e}</option>
           ))}

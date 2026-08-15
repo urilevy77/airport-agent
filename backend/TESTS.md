@@ -1,11 +1,11 @@
 # Debugging map — question → expected tool
 
-```bash
-export ANTHROPIC_API_KEY=...
-./run.sh                 # web UI
-python3 agent.py         # terminal
-python3 selftest.py      # data layer only — no API key needed
-python3 evals/run.py     # every row below, automated, against two+ prompts
+```powershell
+$env:ANTHROPIC_API_KEY = '...'
+.\run.ps1                # web UI
+python agent.py          # terminal
+python selftest.py       # data layer only — no API key needed
+python evals/run.py      # every row below, automated, against two+ prompts
 ```
 
 `selftest.py` is the first thing to run when something looks wrong: it checks the

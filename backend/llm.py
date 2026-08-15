@@ -163,10 +163,16 @@ class Client:
     """One model client. Constructing it is what validates the API key."""
 
     def __init__(self, model=None):
-        # Eager on purpose: a missing or malformed key raises HERE, at
-        # construction, which is what lets server/app.py turn it into a
-        # readable 502 instead of a 500 halfway through a question.
+        # Eager on purpose: a missing key raises HERE, at construction, which is
+        # what lets server/app.py turn it into a readable 502 instead of failing
+        # halfway through a question. The SDK itself no longer checks at
+        # construction — it resolves ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN
+        # into attributes and defers the complaint to the first request — so the
+        # check has to live here.
         self.client = anthropic.Anthropic()
+        if not (self.client.api_key or self.client.auth_token):
+            raise RuntimeError(
+                "ANTHROPIC_API_KEY is not set. Put it in .env or the environment.")
         self.model = model or MODEL
 
     def complete(self, system, messages, tools, model=None, effort=None):

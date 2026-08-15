@@ -51,7 +51,7 @@ export function ThemeProvider({ children }) {
   useEffect(() => {
     const root = document.documentElement
     if (choice === 'system') root.removeAttribute('data-theme')
-    else root.setAttribute('data-theme', choice)
+    else root.setAttribute('data-theme', theme)
     root.style.colorScheme = theme
   }, [choice, theme])
 
@@ -65,6 +65,19 @@ export function ThemeProvider({ children }) {
   }, [])
 
   const value = useMemo(() => ({ theme, choice, toggle }), [theme, choice, toggle])
+  return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
+}
+
+/**
+ * Pin a subtree to one theme, with none of ThemeProvider's side effects.
+ *
+ * The export harness renders charts off-screen through this: a document is
+ * printed, so its plots are drawn light whatever the app is wearing. Stamping
+ * <html> here — as ThemeProvider does — would flip the visible app to light for
+ * as long as the export ran.
+ */
+export function ThemeOverride({ theme, children }) {
+  const value = useMemo(() => ({ theme, choice: theme, toggle: () => {} }), [theme])
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
 }
 

@@ -9,6 +9,7 @@ export default defineConfig({
     '/chat': 'http://localhost:5001',
     '/health': 'http://localhost:5001',
     '/config': 'http://localhost:5001',
+    '/export': 'http://localhost:5001',
   } },
   build: { outDir: 'dist' },
   test: { environment: 'jsdom', globals: true, setupFiles: './src/setupTests.js' },

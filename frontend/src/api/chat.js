@@ -38,6 +38,34 @@ export async function sendChat({ history, question, model, effort }) {
 
 export { COLD_START_MS }
 
+/**
+ * The conversation as a Word document.
+ *
+ * Takes the payload buildExport() assembled and returns the file itself — the
+ * caller decides what to do with the blob, so this stays testable without a
+ * download. An error body is JSON even though success is binary, which is why
+ * the failure path can still read a message out of it.
+ */
+export async function exportDocx(payload) {
+  let response
+  try {
+    response = await fetch('/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+  } catch {
+    throw new ChatError("Couldn't reach the server. Check your connection and try again.")
+  }
+
+  if (!response.ok) {
+    let body = {}
+    try { body = await response.json() } catch { /* an error page, not our JSON */ }
+    throw new ChatError(body.error || `The server returned an error (${response.status}).`)
+  }
+  return response.blob()
+}
+
 // { models: [{id, label}, ...], efforts: [str, ...] } — the allowlist /chat
 // validates model/effort against. Fetched once at startup rather than
 // hardcoded, so the picker can never drift from what the server accepts.

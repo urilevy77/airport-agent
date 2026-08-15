@@ -8,6 +8,7 @@ import MicButton from './components/MicButton'
 import ModelPicker from './components/ModelPicker'
 import TracesPage from './components/TracesPage'
 import useChat from './hooks/useChat'
+import useExport from './hooks/useExport'
 import useSpeech from './hooks/useSpeech'
 import { ThemeProvider } from './theme/ThemeContext'
 import './theme.css'
@@ -59,6 +60,10 @@ function questionFor(messages, selectedChartId) {
   return asked?.role === 'user' ? asked.text : ''
 }
 
+// The effort the pickers open on, whenever the chosen model offers it. Named
+// rather than inlined because two places below have to agree on it.
+const PREFERRED_EFFORT = 'medium'
+
 function keyFromHash(hash) {
   const query = hash.indexOf('?')
   if (query === -1) return ''
@@ -73,23 +78,42 @@ export default function App() {
   const [effort, setEffort] = useState('')
   const [draft, setDraft] = useState('')
 
-  // The effort options for whichever model is ACTUALLY in effect ('' means
-  // "server default", i.e. defaultModel) — never a flat list shared by every
-  // model, since e.g. Haiku takes no effort at all.
+  // The effort options for whichever model is ACTUALLY in effect ('' only
+  // before /config lands, and it falls back to defaultModel) — never a flat
+  // list shared by every model, since e.g. Haiku takes no effort at all.
   const efforts = useMemo(
     () => models.find((m) => m.id === (model || defaultModel))?.efforts ?? [],
     [models, model, defaultModel])
 
-  // Switching to a model that doesn't support the currently-picked effort
-  // (e.g. Sonnet "high" -> Haiku) must clear it — sending that combination is
-  // exactly the 400 this whole picker exists to prevent.
+  // The pickers show a real choice rather than a "Default" entry, so the state
+  // has to be seeded once the allowlist arrives: the server's own default model
+  // (Sonnet), at medium effort.
   useEffect(() => {
-    if (effort && !efforts.includes(effort)) setEffort('')
+    if (!model && defaultModel) setModel(defaultModel)
+  }, [model, defaultModel])
+
+  // Reconciles effort with the model in BOTH directions, because the picker no
+  // longer has an empty option to fall back on. Leaving Haiku (no efforts) for
+  // Sonnet must re-fill it, or the select would sit blank on a value that isn't
+  // in its list; moving TO Haiku must clear it, since sending an effort that
+  // model rejects is exactly the 400 this picker exists to prevent.
+  useEffect(() => {
+    if (!efforts.length) {
+      if (effort) setEffort('')
+    } else if (!efforts.includes(effort)) {
+      setEffort(efforts.includes(PREFERRED_EFFORT) ? PREFERRED_EFFORT : efforts[0])
+    }
   }, [effort, efforts])
   // Dictation writes into the same draft the user types into, then STOPS.
   // No auto-send: recognition mishears airport codes ("PWM" -> "PW M"), so the
   // user gets one glance to fix it before sending.
   const speech = useSpeech({ onTranscript: setDraft })
+
+  // The model the export names is the one that is actually in effect — `model`
+  // is empty until /config lands, and /chat falls back to the same default.
+  const exporter = useExport({
+    messages: chat.messages, charts: chat.charts, model: model || defaultModel,
+  })
 
   if (hash.startsWith('#traces')) {
     return (
@@ -102,7 +126,16 @@ export default function App() {
   return (
     <ThemeProvider>
     <div className="app">
-      <Header />
+      <Header
+        onNewChat={() => { chat.reset(); setDraft('') }}
+        canStartNew={chat.messages.length > 0 && chat.status !== 'thinking'}
+        onExport={exporter.run}
+        // Not mid-turn: the answer being written would be missing from the
+        // document, and the charts are still arriving.
+        canExport={exporter.canExport && chat.status !== 'thinking'}
+        exporting={exporter.exporting}
+        exportError={exporter.error}
+      />
       <div className="workspace">
         <div className="chat-pane">
           <ChatColumn
